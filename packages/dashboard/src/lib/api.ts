@@ -814,7 +814,9 @@ export interface SetupInfoResponse {
 export interface SetupRequestPayload {
   config: AppConfig;
   secrets: {
-    braiins_owner_token: string;
+    braiins_api_version?: 'v1' | 'v2';
+    braiins_api_key?: string;
+    braiins_owner_token?: string;
     braiins_read_only_token?: string;
     dashboard_password: string;
     bitcoind_rpc_url?: string;
@@ -849,7 +851,18 @@ async function publicPost<T>(path: string, body: unknown): Promise<T> {
   return JSON.parse(text) as T;
 }
 
+type PendingBraiinsCommand =
+  | { kind: 'place'; body: { memo: string } }
+  | { kind: 'cancel' | 'speed' | 'price'; bid: string };
+
 export const api = {
+  pendingBraiinsMutation: () => request<{ pending: {
+    request_id: string; created_at: number; needs_review: boolean; command: PendingBraiinsCommand;
+  } | null }>('/api/braiins/pending-mutation'),
+  resolveBraiinsPlacement: (request_id: string, bid_id: string) =>
+    securityPost('/api/braiins/pending-mutation/resolve-placement', { request_id, bid_id }),
+  confirmBraiinsNonPlacement: (request_id: string, confirmation_reference: string) =>
+    securityPost('/api/braiins/pending-mutation/confirm-not-placed', { request_id, confirmation_reference }),
   health: () => publicGet<HealthResponse>('/api/health'),
   setupInfo: () => publicGet<SetupInfoResponse>('/api/setup-info'),
   submitSetup: (payload: SetupRequestPayload) =>
@@ -868,11 +881,19 @@ export const api = {
   // (not `request`) so a 403 "wrong current password" surfaces its error
   // message instead of being swallowed into the session-logout path.
   securityState: () =>
-    request<{ secret_source: 'env' | 'sops' | 'db'; editable: boolean }>('/api/security/state'),
+    request<{
+      secret_source: 'env' | 'sops' | 'db';
+      editable: boolean;
+      braiins_editable: boolean;
+      braiins_active_api_version: 'v1' | 'v2';
+      braiins_api_version: 'v1' | 'v2';
+      braiins_account_id: string | null;
+    }>('/api/security/state'),
   changePassword: (body: { current_password: string; new_password: string }) =>
     securityPost('/api/security/password', body),
   rotateBraiinsToken: (body: {
-    kind: 'owner' | 'read_only';
+    kind: 'owner' | 'read_only' | 'v2';
+    account_id?: string;
     current_password: string;
     token: string;
   }) => securityPost('/api/security/braiins-token', body),

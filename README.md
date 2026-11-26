@@ -15,6 +15,8 @@ A personal-scale autopilot and monitor for the [Braiins Hashpower marketplace](h
 Keeps a rented-hashrate bid continuously alive at an operator-chosen price ceiling, so purchased hashrate keeps
 landing at your own Datum-connected pool without manual babysitting.
 
+Hashpower v2 accepts a Braiins ID API key. Existing v1 installations can keep their legacy tokens during the transition. Braiins schedules v1 shutdown for the end of 2026. [Setup and migration instructions](docs/configuration.md#braiins-hashpower-api-version) · [Braiins migration guide](https://academy.braiins.com/braiins-hashpower/api#migrating-from-v1)
+
 > 💬 **New here, or something not behaving as expected?** The **[FAQ](FAQ.md)** covers the common setup and Profit & Loss questions - how the pieces fit together, what to put in the Stratum host field (and why a LAN IP won't work), and why your Profit & Loss can read as a loss early on.
 
 ![Dashboard in real-time mode](docs/images/dashboard.png)
@@ -434,7 +436,7 @@ or pre-autopilot income the on-chain observer can't see - Lightning payouts, swe
 which becomes the starting value of the lifetime chart and folds into the net P&L), **Profit & Loss**
 spend scope (autopilot-tagged bids only vs the whole Braiins account), **BTC price oracle** (feeds
 the sat ↔ USD header toggle; CoinGecko / Coinbase / Bitstamp / Kraken), and **Security & credentials**
-(change the dashboard password and rotate the Braiins owner / read-only tokens in-app, each gated on your
+(change the dashboard password and rotate a Braiins ID key or legacy tokens in-app, each gated on your
 current password; the only rotation path that needs no shell or SOPS, so it works on Umbrel - #332. On
 env/SOPS installs this section is read-only and points you to where those secrets are defined).
 
@@ -553,7 +555,7 @@ mint phantom payouts from cross-chain balance jumps.
 
 TypeScript monorepo (pnpm workspaces), Node 22+, React dashboard, SQLite (better-sqlite3). Secrets persist
 in `data/state.db` via the first-run wizard by default; a SOPS-encrypted file remains supported for power
-users. Database-stored secrets (Braiins tokens, bitcoind RPC password, Telegram token, DDNS credential) are
+users. Database-stored secrets (Braiins keys and tokens, bitcoind RPC password, Telegram token, DDNS credential) are
 **AES-256-GCM encrypted at rest**, and the dashboard password is stored as a one-way **scrypt** hash, so a
 copied database or a backup no longer exposes them (#331). The encryption key comes from the `BHA_SECRET_KEY`
 environment variable (on Umbrel that's the device-derived `APP_SEED`, kept outside the app's data) or a
@@ -682,14 +684,15 @@ sudo ufw reload
 #### B.4. Pre-seed config via env vars (optional)
 
 To skip parts of the wizard (or skip it entirely if you provide the required secrets), pass `BHA_*`
-env vars on `docker run`:
+env vars on `docker run`. Export `BHA_BRAIINS_API_KEY` in the invoking shell for Docker to pass it through.
 
 ```bash
 docker run -d \
   --name hashrate-autopilot \
   -p 3010:3010 \
   -v hashrate-autopilot-data:/app/data \
-  -e BHA_BRAIINS_OWNER_TOKEN=… \
+  -e BHA_BRAIINS_API_VERSION=v2 \
+  -e BHA_BRAIINS_API_KEY \
   -e BHA_DASHBOARD_PASSWORD=… \
   -e BHA_TARGET_HASHRATE_PH=3.0 \
   --restart unless-stopped \
@@ -889,7 +892,7 @@ pnpm run setup
 ```
 
 The legacy interactive CLI. Generates an `age` key at `~/.config/hashrate-autopilot/age.key`, writes
-a `.sops.yaml` policy, prompts for your tokens + core config, encrypts the secrets to
+a `.sops.yaml` policy, prompts for your Braiins credentials and core settings, encrypts the secrets to
 `.env.sops.yaml`, and bootstraps `data/state.db`. Refuses to overwrite an existing setup unless you
 pass `--force`.
 
@@ -930,9 +933,9 @@ path on purpose so it doesn't collide with other `sops`-encrypted projects on th
 On a fresh install (no secrets configured) the daemon enters **NEEDS_SETUP** mode and the dashboard
 auto-redirects to `/setup`. Three steps:
 
-1. **Access** - your Braiins owner token (from hashpower.braiins.com → API tokens), an optional
-   read-only token, and a dashboard password. Eye-toggle on every secret field so you can verify
-   pasted tokens.
+1. **Access** - choose Hashpower v2 and enter the API key from your account in Braiins ID. Use a Viewer
+   key for monitoring or an Admin key for trading. Choose v1 if you have legacy owner and read-only tokens.
+   Set a dashboard password.
 2. **Mining** - target + minimum-floor hashrate, your Datum gateway / pool URL, the BTC payout
    address, the worker identity (`<btc-address>.<label>` - auto-derived from the address; the period
    is mandatory or Ocean TIDES won't credit your shares), and an optional payout-tracking backend
@@ -955,19 +958,19 @@ Both behaviours are independent of which install path you picked.
 
 1. **In-app (dashboard/DB installs, including Umbrel):** Config → Pool & Payout → **Security &
    credentials** lets you change the dashboard password (takes effect immediately, the old one stops
-   working at once) and rotate the Braiins owner and read-only tokens (each test-called against Braiins
-   before it's saved, so a typo can't break bidding; token changes apply on the next daemon restart).
+   working at once) and rotate the Braiins ID key or legacy tokens (each checked against Braiins
+   before saving). Credential changes take effect on the next daemon restart.
    Every change asks for your current password first. This is the only rotation path that needs no shell
    or SOPS, which is why it exists (#332). The Telegram token, bitcoind RPC password, and DDNS credential
    stay editable in their own Config sections as before.
-2. **`BHA_*` env-var override:** set the env var (e.g. `BHA_BRAIINS_OWNER_TOKEN=…`) in the daemon's
+2. **`BHA_*` env-var override:** set the appropriate variable (e.g. `BHA_BRAIINS_API_KEY` for v2) in the daemon's
    environment and it takes precedence over the DB value on every boot. On Docker, that's
    `docker run -e BHA_…`. See [`docs/configuration.md`](docs/configuration.md). On env/SOPS installs the
    in-app Security section is read-only and points you here, since a DB write would be overwritten on the
    next boot.
 3. **Re-run the wizard:** stop the daemon, run
    `sqlite3 data/state.db 'DELETE FROM secrets;'` to force NEEDS_SETUP, restart, and the dashboard
-   redirects to `/setup` with your existing config pre-filled.
+   redirects to `/setup` with your existing config pre-filled. For a v2 database, use a key for its existing Braiins account.
 
 **Running on a second host (or migrating):** all operator-relevant state lives under `data/`
 (bare-metal) or in the named volume (Docker). Either:

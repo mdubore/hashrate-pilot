@@ -3,13 +3,15 @@
  * result. Proves the OpenAPI codegen → typed client → live API chain works
  * end-to-end, without needing any API key.
  *
- * Usage:  pnpm tsx scripts/smoke-braiins.ts
+ * Usage:  pnpm tsx scripts/smoke-braiins.ts [v1|v2]
  */
 
 import { createBraiinsClient } from '@hashrate-autopilot/braiins-client';
 
 async function main() {
-  const client = createBraiinsClient();
+  const version = process.argv[2] ?? 'v1';
+  if (version !== 'v1' && version !== 'v2') throw new Error('Expected API version v1 or v2.');
+  const client = createBraiinsClient({ apiVersion: version });
 
   console.log('→ GET /spot/stats');
   const stats = await client.getStats();

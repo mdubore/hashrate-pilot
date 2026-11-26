@@ -20,6 +20,7 @@
 
 import type { BraiinsClient } from '@hashrate-autopilot/braiins-client';
 
+import type { V2BidMutations } from '../services/v2-bid-mutations.js';
 import type { BidEventsRepo } from '../state/repos/bid_events.js';
 import type { OwnedBidsRepo } from '../state/repos/owned_bids.js';
 import type { DecisionsRepo } from '../state/repos/decisions.js';
@@ -28,6 +29,8 @@ import type { ExecutionResult, GateOutcome, Proposal, State } from './types.js';
 
 export interface ExecuteDeps {
   readonly braiinsClient: BraiinsClient;
+  readonly v1MigrationGuard?: import('../config/braiins.js').V1MigrationGuard;
+  readonly v2BidMutations?: V2BidMutations;
   readonly ownedBidsRepo: OwnedBidsRepo;
   readonly runtimeRepo: RuntimeStateRepo;
   readonly decisionsRepo: DecisionsRepo;
@@ -167,7 +170,17 @@ function toBidEventInsert(
 }
 
 async function executeLive(deps: ExecuteDeps, proposal: Proposal): Promise<ExecutionResult> {
+  let release: (() => void) | undefined;
   try {
+    if (deps.braiinsClient.apiVersion !== 'v2' && proposal.kind !== 'PAUSE') {
+      // Keep the switch closed until both the exchange operation and its local ownership update finish.
+      release = deps.v1MigrationGuard?.beginWrite();
+    }
+    if (deps.braiinsClient.apiVersion === 'v2' && proposal.kind !== 'PAUSE') {
+      if (!deps.v2BidMutations) throw new Error('Braiins v2 mutation journal is unavailable.');
+      const note = await deps.v2BidMutations.run(proposal);
+      return { proposal, outcome: 'EXECUTED', note };
+    }
     switch (proposal.kind) {
       case 'CREATE_BID': {
         const res = await deps.braiinsClient.placeBid({
@@ -252,6 +265,8 @@ async function executeLive(deps: ExecuteDeps, proposal: Proposal): Promise<Execu
           note: `run_mode → PAUSED (${proposal.reason})`,
         };
       }
+      default:
+        throw new Error(`Unsupported Braiins proposal: ${String(proposal satisfies never)}`);
     }
   } catch (err) {
     return {
@@ -259,6 +274,8 @@ async function executeLive(deps: ExecuteDeps, proposal: Proposal): Promise<Execu
       outcome: 'FAILED',
       error: (err as Error)?.message ?? String(err),
     };
+  } finally {
+    release?.();
   }
 }
 

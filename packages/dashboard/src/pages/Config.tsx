@@ -6,6 +6,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 
+import { BraiinsPendingPlacement } from '../components/BraiinsPendingPlacement';
 import { ChartColorPicker } from '../components/ChartColorPicker';
 import { NumberField } from '../components/NumberField';
 import { SatSymbol } from '../components/SatSymbol';
@@ -1009,6 +1010,7 @@ function ConfigTabsAndContent({
       title: t`Security & credentials`,
       labels: [
         t`Change dashboard password`,
+        t`Braiins ID API key (v2)`,
         t`Rotate Braiins owner token`,
         t`Rotate Braiins read-only token`,
         // Aliases - operators search by intent.
@@ -5717,7 +5719,7 @@ function SecuritySection() {
         </h3>
         <p className="text-xs text-slate-500 mt-1">
           <Trans>
-            Change your dashboard password and rotate your Braiins API tokens. Every change
+            Change your dashboard password or Braiins credentials. Every change
             asks for your current password.
           </Trans>
         </p>
@@ -5749,11 +5751,21 @@ function SecuritySection() {
           )}
         </div>
       )}
+      {state.data?.braiins_active_api_version === 'v2' && <BraiinsPendingPlacement />}
       {state.data && state.data.editable && (
         <div className="space-y-6">
           <ChangePasswordForm />
-          <RotateTokenForm kind="owner" />
-          <RotateTokenForm kind="read_only" />
+          {state.data.braiins_editable ? (
+            <>
+              <RotateTokenForm kind="v2" accountId={state.data.braiins_account_id} />
+              {state.data.braiins_api_version === 'v1' && (
+                <>
+                  <RotateTokenForm kind="owner" />
+                  <RotateTokenForm kind="read_only" />
+                </>
+              )}
+            </>
+          ) : <p className="text-xs text-slate-400"><Trans>Update your Braiins credentials in the service environment and restart.</Trans></p>}
         </div>
       )}
     </section>
@@ -5860,13 +5872,17 @@ function ChangePasswordForm() {
   );
 }
 
-function RotateTokenForm({ kind }: { kind: 'owner' | 'read_only' }) {
+function RotateTokenForm({ kind, accountId }: { kind: 'owner' | 'read_only' | 'v2'; accountId?: string | null | undefined }) {
+  const [expectedAccount, setExpectedAccount] = useState(accountId ?? '');
+  const queryClient = useQueryClient();
   const [current, setCurrent] = useState('');
   const [token, setToken] = useState('');
 
   const mutation = useMutation({
     mutationFn: () =>
-      api.rotateBraiinsToken({ kind, current_password: current, token: token.trim() }),
+      api.rotateBraiinsToken({ kind, current_password: current, token: token.trim(),
+        ...(kind === 'v2' ? { account_id: (accountId ?? expectedAccount).trim() } : {}),
+      }),
   });
   const result = mutation.data;
 
@@ -5878,6 +5894,7 @@ function RotateTokenForm({ kind }: { kind: 'owner' | 'read_only' }) {
         if (res.ok) {
           setCurrent('');
           setToken('');
+          void queryClient.invalidateQueries({ queryKey: ['security-state'] });
         }
       },
     });
@@ -5886,18 +5903,26 @@ function RotateTokenForm({ kind }: { kind: 'owner' | 'read_only' }) {
   return (
     <form onSubmit={onSubmit} className="space-y-2">
       <div className="text-sm font-medium text-slate-300">
-        {kind === 'owner' ? (
+        {kind === 'v2' ? (
+          <Trans>Braiins ID API key (v2)</Trans>
+        ) : kind === 'owner' ? (
           <Trans>Rotate Braiins owner token</Trans>
         ) : (
           <Trans>Rotate Braiins read-only token</Trans>
         )}
       </div>
       <p className="text-xs text-slate-500">
-        <Trans>
-          The new token is tested against Braiins before it's saved, so a typo can't disable
-          order authorization. It takes effect after the daemon restarts.
-        </Trans>
+        {kind === 'v2'
+          ? <Trans>Enter the account ID and key from Braiins ID. Select DRY-RUN before switching from v1. Restart to apply the verified key.</Trans>
+          : <Trans>The daemon validates the new token with Braiins and applies it after restart.</Trans>}
       </p>
+      {kind === 'v2' && (
+        <label className="block text-xs text-slate-400">
+          <Trans>Braiins account ID</Trans>
+          <input type="text" autoComplete="off" value={accountId ?? expectedAccount} readOnly={!!accountId}
+            onChange={(e) => setExpectedAccount(e.target.value)} className={PW_INPUT_CLASS} />
+        </label>
+      )}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         <input
           type="password"
@@ -5910,7 +5935,7 @@ function RotateTokenForm({ kind }: { kind: 'owner' | 'read_only' }) {
         <input
           type="password"
           autoComplete="off"
-          placeholder={kind === 'owner' ? t`New owner token` : t`New read-only token`}
+          placeholder={kind === 'v2' ? t`New API key` : kind === 'owner' ? t`New owner token` : t`New read-only token`}
           value={token}
           onChange={(e) => setToken(e.target.value)}
           className={PW_INPUT_CLASS}
@@ -5919,10 +5944,10 @@ function RotateTokenForm({ kind }: { kind: 'owner' | 'read_only' }) {
       <div className="flex items-center gap-3">
         <button
           type="submit"
-          disabled={mutation.isPending || !current || !token.trim()}
+          disabled={mutation.isPending || !current || !token.trim() || (kind === 'v2' && !(accountId ?? expectedAccount).trim())}
           className="px-3 py-1.5 text-sm rounded border border-slate-700 text-slate-300 hover:bg-slate-800 disabled:opacity-50 whitespace-nowrap"
         >
-          {mutation.isPending ? <Trans>Validating…</Trans> : <Trans>Rotate token</Trans>}
+          {mutation.isPending ? <Trans>Validating…</Trans> : kind === 'v2' ? <Trans>Save API key</Trans> : <Trans>Rotate token</Trans>}
         </button>
         {result && result.ok && (
           <span className="text-xs text-emerald-300">

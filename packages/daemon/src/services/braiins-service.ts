@@ -61,6 +61,10 @@ export class BraiinsService {
     this.now = options.now ?? Date.now;
   }
 
+  get apiVersion() {
+    return this.client.apiVersion ?? 'v1';
+  }
+
   // ---- fresh-every-tick reads ------------------------------------------
 
   async getStats(): Promise<MarketStats> {

@@ -52,6 +52,7 @@ import {
 } from './http/routes/config.js';
 import { sameOriginCorsDelegator } from './http/server.js';
 import type { ConfigRepo } from './state/repos/config.js';
+import { braiinsClientConfig, verifyV2Credentials } from './config/braiins.js';
 import type { SecretsRepo } from './state/repos/secrets.js';
 
 export interface SetupModeServerDeps {
@@ -197,6 +198,15 @@ export async function createSetupModeServer(
     }
     const toSave = existing ? keepCredentials(config, existing) : config;
 
+    if (secrets.braiins_api_version === 'v2') {
+      try {
+        secrets.braiins_account_id = await verifyV2Credentials(deps.secretsRepo, braiinsClientConfig(secrets));
+      } catch {
+        return reply.code(422).send({ error: 'Could not verify the Braiins v2 key for this account and its saved bid history.' });
+      }
+    } else if (await deps.secretsRepo.getAccountBinding()) {
+      return reply.code(409).send({ error: 'This database belongs to a Braiins v2 account. Use a key for the same account.' });
+    }
     deps.log?.('setup: writing config + secrets to db');
     await deps.configRepo.upsert(toSave);
     await deps.secretsRepo.upsert(secrets);

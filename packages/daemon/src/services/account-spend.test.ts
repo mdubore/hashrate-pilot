@@ -184,6 +184,29 @@ describe('AccountSpendService (repo-backed)', () => {
     expect(listBids.mock.calls[1]?.[0]).toMatchObject({ offset: 200 });
   });
 
+  it("follows a v2 cursor beyond a short active-only page", async () => {
+    const listBids = vi
+      .fn<BraiinsClient["listBids"]>()
+      .mockResolvedValueOnce({
+        items: [bid({ id: "A", consumed: 7, is_current: true })],
+        next_page_token: "more",
+      })
+      .mockResolvedValueOnce({
+        items: [bid({ id: "B", consumed: 8 })],
+        next_page_token: "",
+      });
+    const { repo } = makeFakeRepo();
+    const snap = await new AccountSpendService(
+      makeClient(listBids),
+      repo,
+    ).getLifetimeSpend();
+    expect(snap?.total_settlement_sat).toBe(15);
+    expect(listBids.mock.calls[1]?.[0]).toEqual({
+      limit: 200,
+      page_token: "more",
+    });
+  });
+
   it('returns null when the API throws, without caching the failure', async () => {
     const listBids = vi.fn<BraiinsClient['listBids']>().mockRejectedValueOnce(new Error('boom'));
     const { repo } = makeFakeRepo();
@@ -193,4 +216,14 @@ describe('AccountSpendService (repo-backed)', () => {
     const snap = await svc.getLifetimeSpend();
     expect(snap?.closed_sat).toBe(42);
   });
+});
+
+it('keeps lifetime spend unknown when a v2 bid has no settled counter', async () => {
+  const item = bid({ id: 'B1', consumed: 0, is_current: true });
+  const { counters_committed: _unused, ...unsettled } = item;
+  const listBids = vi.fn<BraiinsClient['listBids']>().mockResolvedValueOnce({
+    items: [unsettled], next_page_token: '',
+  });
+  const { repo } = makeFakeRepo();
+  expect(await new AccountSpendService(makeClient(listBids), repo).getLifetimeSpend()).toBeNull();
 });

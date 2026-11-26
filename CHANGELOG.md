@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-26
+
+### `[Feature]` Support Braiins Hashpower v2 alongside v1
+
+Operators can connect a Braiins ID key and migrate existing spot bids to v2. Autopilot records v2 bid changes before transmission so a lost reply or restart can be reconciled without placing a duplicate order. Existing v1 installations keep their credentials and behavior.
+
 ## 2026-11-25
 
 ### `[Release]` v1.18.4

@@ -302,6 +302,9 @@ const APP_CONFIG_ENV: {
 const SECRETS_ENV: {
   readonly [K in keyof Secrets]: { varName: string; coerce: Coercer };
 } = {
+  braiins_api_version: { varName: 'BHA_BRAIINS_API_VERSION', coerce: asString },
+  braiins_api_key: { varName: 'BHA_BRAIINS_API_KEY', coerce: asString },
+  braiins_account_id: { varName: 'BHA_BRAIINS_ACCOUNT_ID', coerce: asString },
   braiins_owner_token: { varName: 'BHA_BRAIINS_OWNER_TOKEN', coerce: asString },
   braiins_read_only_token: { varName: 'BHA_BRAIINS_READ_ONLY_TOKEN', coerce: asString },
   telegram_bot_token: { varName: 'BHA_TELEGRAM_BOT_TOKEN', coerce: asString },
@@ -310,6 +313,11 @@ const SECRETS_ENV: {
   bitcoind_rpc_password: { varName: 'BHA_BITCOIND_RPC_PASSWORD', coerce: asString },
   dashboard_password: { varName: 'BHA_DASHBOARD_PASSWORD', coerce: asString },
 };
+
+export function hasBraiinsCredentialOverrides(env: NodeJS.ProcessEnv): boolean {
+  return Object.entries(SECRETS_ENV).some(([field, { varName }]) =>
+    field.startsWith('braiins_') && env[varName] !== undefined);
+}
 
 // ---------------------------------------------------------------------------
 // Public API

@@ -1,0 +1,3701 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Braiins Hashpower API",
+    "version": "2.1.0",
+    "description": "REST API for applications and account automation integrating with\n[Braiins Hashpower](https://hashpower.braiins.com), the SHA-256 hashrate\nmarketplace.\n\n## Versions\n\nThis is transitional version 2. All paths start with `/v2`. Within version\n2, changes are backward compatible: new endpoints, new optional request\nfields, new response fields and new enum values can appear at any time, so ignore\nresponse fields you do not know and treat unknown enum values as unknown.\nConfigure generated clients to do the same; some generators reject unknown\nenum values by default. Breaking changes would ship as a new major version\nunder a new path prefix.\n\nThe legacy API under `/v1` (API keys in the `apikey` header) is unchanged\nand will be retired after a migration period. Those legacy keys are distinct\nfrom Braiins ID API keys and cannot authenticate v2 requests.\n\n## Authentication\n\nMarket data and the spot settings are public. Every other endpoint\naccepts an OAuth 2.0 access token or a Braiins ID API key, sent as\n`Authorization: Bearer \u003ccredential\u003e`. Browser session cookies are not accepted.\nThe API is for server-side and native applications: it sends no CORS\nheaders, so browsers block calls from web pages. This reference is the\nexception when it is opened on the API's own host: there it can send test\nrequests with an API key you enter, which stays in the page.\n\nFor OAuth, when a user connects your application, they choose which\nHashpower accounts it may use and approve its scopes:\n\n| Scope | Allows |\n|---|---|\n| `hashpower:read` | Reading accounts, balances, transactions, spot fees, bids, bid hashrate and best shares, and checking pools. |\n| `hashpower:write` | Placing, updating and cancelling bids. It does not include `hashpower:read`; request both to manage bids. |\n\nAccount owners create API keys on the account page in Braiins ID. A key\nacts only on its own account and must have a Hashpower grant. Read operations\nrequire the Viewer or Admin role; placing, updating and cancelling bids\nrequire the Admin role. Keys have roles, not OAuth scopes.\n\nCall `GET /v2/accounts` to list the accounts the credential may act on and use\ntheir `account_id` in every path that contains `{account_id}`. For a key this\nis its one account; another account ID, or a key without a resolved default\nsubaccount, fails with `ACCOUNT_NOT_GRANTED`. OAuth access ends when the user\nrevokes the connection or loses access to the account. After a key is\nrevoked or expires, new requests can continue for up to 15 seconds.\nRequests already accepted may finish. Keys also require current account\naccess. No endpoint can withdraw funds.\n\n## Units and formats\n\n- Amounts are integer satoshis (`*_sat`).\n- Prices are integer satoshis per EH/day: the price of 1 EH/s of hashrate\n  for one day.\n- Hashrates are PH/s (`*_ph`). Volumes are EH·day, so price × volume =\n  satoshis.\n- 64-bit integers are JSON strings, for example `\"price_sat\": \"48500000\"`.\n  Requests accept numbers or strings.\n- Timestamps are RFC 3339 strings in UTC; durations are strings with an\n  `s` suffix, for example `\"600s\"`.\n- Field names are snake_case. Enums are strings.\n- Responses include every field, with its zero value when it is not set:\n  `0` (`\"0\"` for 64-bit integers), `\"\"`, `false`, `[]` or the enum's\n  `*_UNSPECIFIED` value. Fields whose description says when they are\n  absent are left out in those cases instead, and so are unset object\n  fields such as timestamps.\n\n## Lists\n\nCollections return up to `page_size` items and a `next_page_token`; pass it\nas `page_token` to fetch the next page. It is empty on the last page. Time\nseries take a `limit` instead.\n\n## Retrying changes\n\n`PlaceBid`, `UpdateBid` and `CancelBid` take a client-generated UUID\n`request_id`, an idempotency key. Hashpower executes a change at most once\nper account (tenant and subaccount) and `request_id`, across credentials\nand key rotation, and once it has executed the change, the outcome is final\nfor that `request_id`: a retry with the same `request_id` and body returns\nit, including a rejection. Hashpower keeps each `request_id` and its\noutcome for at least 30 days. Reusing a `request_id` with a different body\nfails with `REQUEST_ID_REUSED`.\n\n- After a timeout, a 429 or 5xx response, or `OUTCOME_PENDING`, retry with\n  the same `request_id` and body.\n- After any other error, fix the cause and send the change with a new\n  `request_id`. For example, a cancellation refused with\n  `CANCEL_GRACE_PERIOD` needs a new `request_id` once the grace period has\n  passed.\n- If retries still return `OUTCOME_PENDING` after a minute, keep the original request\n  record. For an update or cancellation, call `GetBid`. If that read fails, handle the\n  read error before deciding to resubmit.\n\n  For an update, compare the fields you requested with the returned bid. If they\n  match, no further update is needed. Otherwise, if the update is still intended,\n  submit it again with a new `request_id`. Do not replay an outdated update after a\n  later change to the bid. The new command is subject to normal validation.\n\n  For a cancellation, do not resend if the bid is `BID_STATE_CANCELING`,\n  `BID_STATE_CANCELED`, or `BID_STATE_FULFILLED`. Otherwise, if cancellation is still\n  intended, submit it again with a new `request_id`, subject to normal validation.\n\n  For a placement, list all bids with `current_only=false`, including terminal bids.\n  Page backward until the results cover the first attempt, allowing for clock skew,\n  and compare the placement's terms. A unique memo chosen before the first attempt can\n  help correlate a placement, but it is not an idempotency key. A missing match does\n  not prove non-execution. Hashpower does not guarantee when a placed bid appears in\n  `ListBids`.\n\n  The API does not yet provide conclusive automated placement recovery. Stop automatic\n  replacement while the placement's outcome remains unknown. Do not create another\n  placement with a new UUID or fall back to v1 solely because the outcome remains\n  unknown.\n\n## Rate limits\n\nRequests are limited per client IP address, whether or not they are\nauthenticated, so all users of a server-side integration share the budgets\nof its address. Each endpoint draws from a budget: a burst, refilled at a\nsteady rate. The endpoint's description states its limit, and its\n`x-rate-limit` extension gives the same as data: the `budget`, the `burst`\nand the steady rate `per_minute`. Endpoints that name the same budget share\nit.\n\nThe limits are approximate. Each gateway instance counts them separately,\nso `X-RateLimit-Remaining` can differ between consecutive requests. Each\nbudget also has a ceiling shared by all clients, so under heavy overall\nload a request can be limited before its own budget is used up.\n\nA request over the limit fails with HTTP 429 and code 8\n(`RESOURCE_EXHAUSTED`) and is not executed. There is no `Retry-After`\nheader: retry with backoff, no sooner than `X-RateLimit-Reset` seconds\nlater. A change can be retried with the same `request_id`. Responses carry\n`X-RateLimit-Limit` (the burst), `X-RateLimit-Remaining` and\n`X-RateLimit-Reset` for the endpoint's budget.\n\n## Errors\n\nErrors use the [`google.rpc.Status`](https://cloud.google.com/apis/design/errors)\nformat with an HTTP status matching its `code`:\n\n```json\n{\n  \"code\": 9,\n  \"message\": \"The account's available balance is too low.\",\n  \"details\": [\n    {\n      \"@type\": \"type.googleapis.com/google.rpc.ErrorInfo\",\n      \"reason\": \"INSUFFICIENT_FUNDS\",\n      \"domain\": \"hashpower.braiins.com\"\n    }\n  ]\n}\n```\n\nBranch on `ErrorInfo.reason`, never on `message`. Each endpoint lists the\nHTTP statuses it returns and the reasons specific to it; all reasons are\nlisted in the `TradingErrorReason`, `DeliveryErrorReason` and\n`PoolErrorReason` schemas. Errors without a reason carry only the status:\nmalformed requests (400, sometimes with `google.rpc.BadRequest` field\nviolations) and temporary unavailability (503, retry with backoff). An API\nkey for another product is rejected with 401 before the endpoint runs,\nwithout an `ErrorInfo.reason`. Hashpower itself can return a JSON\n`UNSUPPORTED_CREDENTIAL` error if it could not verify or accept the\nrequest's authentication.\n\nRequests rejected before they reach Hashpower can have a plain-text body;\nbranch on the HTTP status for those: unknown paths (404), an unknown query\nparameter or a body that is not valid JSON for the endpoint (400; unknown\nbody fields are ignored), a missing, invalid or expired credential or an API\nkey for another product (401, with\n`WWW-Authenticate: Bearer`), and Braiins ID being unavailable to check the\ncredential (503).",
+    "contact": {
+      "name": "Braiins support",
+      "url": "https://braiins.com/contact"
+    }
+  },
+  "servers": [
+    {
+      "url": "https://hashpower.braiins.com",
+      "description": "Production"
+    }
+  ],
+  "tags": [
+    {
+      "name": "AccountService",
+      "x-displayName": "Accounts",
+      "description": "Accounts available to the caller and their funds.\n\n An account is a Hashpower account with one bitcoin balance, shared by\n everything the account buys. Every path with `{account_id}`, including the\n spot paths under `/v2/spot/accounts/`, takes the `account_id` returned by\n `ListAccounts`; there is no separate spot account. A token can act only on\n accounts the user granted to the application, while the user still has access.\n A Braiins ID API key acts only on its own account.\n\n Requires the OAuth `hashpower:read` scope or an API key with read access."
+    },
+    {
+      "name": "BidService",
+      "x-displayName": "Bids",
+      "description": "Spot market bids: buying hashrate delivered to your pool.\n\n A bid buys hashrate at up to `price_sat` per EH/day until its `amount_sat`\n budget is spent or it is cancelled. Delivered hashrate goes to the bid's\n destination pool and worker. Bids are paid from the balance of the account\n in the path, an `account_id` from `ListAccounts`.\n\n `GetSpotSettings` is public. The other read methods require the\n OAuth `hashpower:read` scope or an API key with read access. Bid changes require\n OAuth `hashpower:write` (which does not imply read) or an API key allowed to\n place, update and cancel bids.\n\n Each change carries a client-generated `request_id`, its idempotency key,\n scoped to the account across credentials, including API key rotation.\n Once Hashpower has executed a change, the outcome is final for that\n `request_id`: a retry with the same `request_id` and body returns it,\n including a rejection, instead of executing the change again. Hashpower keeps\n each `request_id` and its outcome for at least 30 days. Retry with the\n same `request_id` only after a timeout, a 429 or 5xx response, or\n `OUTCOME_PENDING`. After any other error, fix the cause and send the change\n with a new `request_id`; for example, cancel a bid refused with\n `CANCEL_GRACE_PERIOD` with a new `request_id` once the grace period has\n passed.\n\n The market applies a placement, update or cancellation when it accepts it,\n and a mutation returns the bid once the bid shows the change, a later change\n that replaced it, or the bid's end. If the bid shows none of these within a\n few seconds, the bid is returned in a transitional state:\n `BID_STATE_CREATING` from `PlaceBid`, `BID_STATE_UPDATING` from `UpdateBid`\n or `BID_STATE_CANCELING` from `CancelBid`. Call `GetBid` until the bid leaves\n that state."
+    },
+    {
+      "name": "DeliveryService",
+      "x-displayName": "Bid delivery",
+      "description": "Delivered hashrate over time and best shares attributed to your bids.\n\n Requires the OAuth `hashpower:read` scope or an API key with read access.\n Hashrates are in PH/s, averaged over each interval.\n\n Best shares belong to a destination (pool URL and worker), not to one bid. A\n share counts for every bid with that destination from its creation until\n one minute after it ends. Paused periods and bids without purchases are\n included; attribution does not prove that the bid produced the share. Bids\n with the same destination and lifetime show the same best share and count.\n Hashpower records at most one best share per destination\n every 15 seconds, and only one far above the pool's share difficulty, so\n `share_count` counts recorded best shares, not every share delivered. A share\n appears on a bid about 7 minutes after it was found."
+    },
+    {
+      "name": "PoolService",
+      "x-displayName": "Pools",
+      "description": "Mining pools used as bid destinations.\n\n OAuth requires the `hashpower:read` scope; API keys require read access."
+    },
+    {
+      "name": "MarketService",
+      "x-displayName": "Market data",
+      "description": "Public market data for the SHA-256 hashrate spot market.\n\n No authentication is required. Prices are in satoshis per EH/day, volumes in\n EH·day (so price × volume = satoshis), and hashrates in PH/s."
+    }
+  ],
+  "components": {
+    "responses": {
+      "BadRequest": {
+        "description": "The request is invalid. The endpoint lists its reasons; a malformed\nrequest has none and can carry `google.rpc.BadRequest` field\nviolations. Unknown query parameters and bodies that are not valid\nJSON for the endpoint are rejected before they reach Hashpower, with a\nplain-text body.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/google.rpc.Status"
+            }
+          },
+          "text/plain": {
+            "schema": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "Conflict": {
+        "description": "The `request_id` was already used with a different body\n(`REQUEST_ID_REUSED`).",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/google.rpc.Status"
+            }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "The credential may not do this: `UNSUPPORTED_CREDENTIAL` (Hashpower\ncould not accept the request's authentication), `INSUFFICIENT_SCOPE`\n(OAuth), `ACCOUNT_NOT_GRANTED`, or a reason the endpoint lists.\nBid changes also return `INSUFFICIENT_PERMISSION` (403) when the key\ncan read the account but may not change bids.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/google.rpc.Status"
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "The bid does not exist in this account (`BID_NOT_FOUND`).",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/google.rpc.Status"
+            }
+          }
+        }
+      },
+      "ServiceUnavailable": {
+        "description": "Hashpower is temporarily unavailable; retry with backoff. For a change,\n`OUTCOME_PENDING` means its outcome is not known: see Retrying changes.\nUnavailability detected at the gateway, including Braiins ID being\nunable to check the credential, has a plain-text or empty body.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/google.rpc.Status"
+            }
+          },
+          "text/plain": {
+            "schema": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "TooManyRequests": {
+        "description": "The rate limit was exceeded and the request was not executed; retry\nlater. A change can be retried with the same `request_id`.",
+        "headers": {
+          "X-RateLimit-Limit": {
+            "description": "The burst of the endpoint's budget.",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          "X-RateLimit-Remaining": {
+            "description": "Requests left in the budget.",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          "X-RateLimit-Reset": {
+            "description": "Seconds until the budget is next refilled.",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/google.rpc.Status"
+            }
+          }
+        }
+      },
+      "Unauthorized": {
+        "description": "The credential is missing, invalid or expired, or the API key is for\nanother product. The gateway rejects it with a plain-text body and a\n`WWW-Authenticate: Bearer` header, without an `ErrorInfo.reason`.\nIf Hashpower itself answers 401, its JSON body carries\n`UNSUPPORTED_CREDENTIAL`.",
+        "headers": {
+          "WWW-Authenticate": {
+            "description": "`Bearer` when the gateway rejected the credential.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/google.rpc.Status"
+            }
+          },
+          "text/plain": {
+            "schema": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "braiins.hashpower.delivery.v2.BatchGetBidBestSharesRequest": {
+        "type": "object",
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "title": "account_id",
+            "description": "Account identifier from `ListAccounts`."
+          },
+          "bid_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "title": "bid_ids",
+            "description": "Bid identifiers, for example `B1234`: 1 to 100 distinct bids."
+          }
+        },
+        "title": "BatchGetBidBestSharesRequest",
+        "required": [
+          "account_id",
+          "bid_ids"
+        ],
+        "additionalProperties": false,
+        "description": "Request for `BatchGetBidBestShares`."
+      },
+      "braiins.hashpower.delivery.v2.BatchGetBidBestSharesResponse": {
+        "type": "object",
+        "properties": {
+          "bid_best_shares": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/braiins.hashpower.delivery.v2.BidBestShare"
+            },
+            "title": "bid_best_shares",
+            "description": "Best shares of the bids that were found, in request order."
+          },
+          "missing_bid_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "title": "missing_bid_ids",
+            "description": "Requested bids that do not exist in this account, including bids placed\n moments ago."
+          }
+        },
+        "title": "BatchGetBidBestSharesResponse",
+        "additionalProperties": false,
+        "description": "Response for `BatchGetBidBestShares`."
+      },
+      "braiins.hashpower.delivery.v2.BestShare": {
+        "type": "object",
+        "properties": {
+          "share_hash": {
+            "type": "string",
+            "title": "share_hash",
+            "description": "Block header hash, lowercase hex, in the byte order block explorers show."
+          },
+          "difficulty": {
+            "type": "number",
+            "title": "difficulty",
+            "format": "double",
+            "description": "Difficulty the share's hash reached."
+          },
+          "network_difficulty": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "network_difficulty",
+            "format": "double",
+            "description": "Network difficulty of the share's job. Absent when unknown."
+          },
+          "closeness": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "closeness",
+            "format": "double",
+            "description": "`difficulty` divided by `network_difficulty`; 1 or more would have found\n a block. Absent when the network difficulty is unknown."
+          },
+          "time": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/google.protobuf.Timestamp"
+              }
+            ],
+            "title": "time",
+            "description": "When the share was found, up to about 15 seconds later."
+          },
+          "block_height": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "title": "block_height",
+            "description": "Height of the block the share's job was for. Absent when unknown."
+          },
+          "hashrate_ph": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "hashrate_ph",
+            "format": "double",
+            "description": "Hashrate the destination accepted from Hashpower, from every bid\n delivering to it, averaged over the clock-aligned 10 minutes before those\n the share was found in. Absent when unknown, and for up to about 15 minutes\n after the share."
+          }
+        },
+        "title": "BestShare",
+        "additionalProperties": false,
+        "description": "A best share recorded for a destination."
+      },
+      "braiins.hashpower.delivery.v2.BidBestShare": {
+        "type": "object",
+        "properties": {
+          "bid_id": {
+            "type": "string",
+            "title": "bid_id",
+            "description": "Bid identifier, for example `B1234`."
+          },
+          "share_count": {
+            "type": "string",
+            "title": "share_count",
+            "format": "int64",
+            "description": "Best shares attributed by destination and bid lifetime, including paused\n periods and the one-minute grace period after the bid ends."
+          },
+          "best_share": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/braiins.hashpower.delivery.v2.BestShare"
+              }
+            ],
+            "title": "best_share",
+            "description": "The best share with the highest difficulty. Absent until one is recorded."
+          }
+        },
+        "title": "BidBestShare",
+        "additionalProperties": false,
+        "description": "A bid's best share and how many best shares count for it."
+      },
+      "braiins.hashpower.delivery.v2.BidHashrate": {
+        "type": "object",
+        "properties": {
+          "samples": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/braiins.hashpower.delivery.v2.HashrateSample"
+            },
+            "title": "samples",
+            "description": "Samples, oldest first, from the bid's first to its last interval with\n delivery."
+          }
+        },
+        "title": "BidHashrate",
+        "additionalProperties": false,
+        "description": "A bid's delivered hashrate, one sample per interval."
+      },
+      "braiins.hashpower.delivery.v2.DeliveryErrorReason": {
+        "type": "string",
+        "title": "DeliveryErrorReason",
+        "enum": [
+          "DELIVERY_ERROR_REASON_UNSPECIFIED",
+          "UNSUPPORTED_CREDENTIAL",
+          "INSUFFICIENT_SCOPE",
+          "ACCOUNT_NOT_GRANTED",
+          "BID_NOT_FOUND"
+        ],
+        "description": "Values of `google.rpc.ErrorInfo.reason` returned by `DeliveryService`. The\n error domain is `hashpower.braiins.com`. New reasons may be added; handle\n unknown reasons by their gRPC/HTTP status.\n\n - `UNSUPPORTED_CREDENTIAL` (401/403): Hashpower could not verify or accept\n   the request's authentication. Invalid API keys and keys for another product\n   are rejected with HTTP 401 at the gateway, without an `ErrorInfo.reason`.\n - `INSUFFICIENT_SCOPE` (403): The OAuth token lacks the `hashpower:read` scope.\n - `ACCOUNT_NOT_GRANTED` (403): This credential cannot access the requested\n   account, including when its access has been revoked.\n - `BID_NOT_FOUND` (404): The bid does not exist in this account."
+      },
+      "braiins.hashpower.delivery.v2.GetBidBestShareRequest": {
+        "type": "object",
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "title": "account_id",
+            "description": "Account identifier from `ListAccounts`."
+          },
+          "bid_id": {
+            "type": "string",
+            "title": "bid_id",
+            "description": "Bid identifier, for example `B1234`."
+          }
+        },
+        "title": "GetBidBestShareRequest",
+        "required": [
+          "account_id",
+          "bid_id"
+        ],
+        "additionalProperties": false,
+        "description": "Request for `GetBidBestShare`."
+      },
+      "braiins.hashpower.delivery.v2.GetBidHashrateRequest": {
+        "type": "object",
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "title": "account_id",
+            "description": "Account identifier from `ListAccounts`."
+          },
+          "bid_id": {
+            "type": "string",
+            "title": "bid_id",
+            "description": "Bid identifier, for example `B1234`."
+          },
+          "interval": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/braiins.hashpower.delivery.v2.HashrateInterval"
+              }
+            ],
+            "title": "interval",
+            "description": "Length of each sample."
+          },
+          "start_time": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/google.protobuf.Timestamp"
+              }
+            ],
+            "title": "start_time",
+            "description": "Return samples starting with the first interval that starts at or after\n this time. Omit to get the most recent samples, which end with the bid's\n last interval with delivery."
+          },
+          "limit": {
+            "type": "integer",
+            "title": "limit",
+            "description": "Number of samples to return. Defaults to 288; values above 1000 are\n treated as 1000."
+          }
+        },
+        "title": "GetBidHashrateRequest",
+        "required": [
+          "account_id",
+          "bid_id",
+          "interval"
+        ],
+        "additionalProperties": false,
+        "description": "Request for `GetBidHashrate`."
+      },
+      "braiins.hashpower.delivery.v2.HashrateInterval": {
+        "type": "string",
+        "title": "HashrateInterval",
+        "enum": [
+          "HASHRATE_INTERVAL_UNSPECIFIED",
+          "HASHRATE_INTERVAL_5M",
+          "HASHRATE_INTERVAL_15M",
+          "HASHRATE_INTERVAL_1H",
+          "HASHRATE_INTERVAL_4H"
+        ],
+        "description": "Length of one hashrate sample.\n\n - `HASHRATE_INTERVAL_5M`: 5 minutes.\n - `HASHRATE_INTERVAL_15M`: 15 minutes.\n - `HASHRATE_INTERVAL_1H`: 1 hour.\n - `HASHRATE_INTERVAL_4H`: 4 hours."
+      },
+      "braiins.hashpower.delivery.v2.HashrateSample": {
+        "type": "object",
+        "properties": {
+          "start_time": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/google.protobuf.Timestamp"
+              }
+            ],
+            "title": "start_time",
+            "description": "Start of the interval."
+          },
+          "purchased_ph": {
+            "type": "number",
+            "title": "purchased_ph",
+            "format": "double",
+            "description": "Hashrate bought and validated by Hashpower."
+          },
+          "accepted_ph": {
+            "type": "number",
+            "title": "accepted_ph",
+            "format": "double",
+            "description": "Hashrate accepted by the destination pool."
+          },
+          "rejected_ph": {
+            "type": "number",
+            "title": "rejected_ph",
+            "format": "double",
+            "description": "Hashrate rejected by the destination pool."
+          }
+        },
+        "title": "HashrateSample",
+        "additionalProperties": false,
+        "description": "Average hashrate during one interval, computed from the shares delivered\n and the full interval length. The newest interval may still be in progress\n and a bid's first interval may start before the bid, so those samples read\n lower than the hashrate delivered while they were open."
+      },
+      "braiins.hashpower.market.v2.AskLevel": {
+        "type": "object",
+        "properties": {
+          "price_sat": {
+            "type": "string",
+            "title": "price_sat",
+            "format": "int64",
+            "description": "Price of this level."
+          },
+          "hashrate_matched_ph": {
+            "type": "number",
+            "title": "hashrate_matched_ph",
+            "format": "double",
+            "description": "Hashrate being sold at this level, estimated over 10 minutes."
+          },
+          "hashrate_available_ph": {
+            "type": "number",
+            "title": "hashrate_available_ph",
+            "format": "double",
+            "description": "Hashrate offered at this level, estimated over 10 minutes."
+          }
+        },
+        "title": "AskLevel",
+        "additionalProperties": false,
+        "description": "Asks aggregated at one price."
+      },
+      "braiins.hashpower.market.v2.BidLevel": {
+        "type": "object",
+        "properties": {
+          "price_sat": {
+            "type": "string",
+            "title": "price_sat",
+            "format": "int64",
+            "description": "Price of this level."
+          },
+          "amount_sat": {
+            "type": "string",
+            "title": "amount_sat",
+            "format": "int64",
+            "description": "Unspent budget of the bids at this level, in satoshis."
+          },
+          "hashrate_matched_ph": {
+            "type": "number",
+            "title": "hashrate_matched_ph",
+            "format": "double",
+            "description": "Hashrate the bids at this level are buying, estimated over 10 minutes."
+          },
+          "speed_limit_ph": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "speed_limit_ph",
+            "format": "double",
+            "description": "Sum of the speed limits of the bids at this level; a bid limited because of\n delivery problems counts at its reduced limit, which can be 0. Absent when a\n bid at this level has no speed limit, and when the limit is not known, as\n can happen for a moment while the order book changes."
+          }
+        },
+        "title": "BidLevel",
+        "additionalProperties": false,
+        "description": "Bids aggregated at one price."
+      },
+      "braiins.hashpower.market.v2.GetMarketStatsRequest": {
+        "type": "object",
+        "title": "GetMarketStatsRequest",
+        "additionalProperties": false,
+        "description": "Request for `GetMarketStats`."
+      },
+      "braiins.hashpower.market.v2.GetOrderBookRequest": {
+        "type": "object",
+        "title": "GetOrderBookRequest",
+        "additionalProperties": false,
+        "description": "Request for `GetOrderBook`."
+      },
+      "braiins.hashpower.market.v2.ListOhlcRequest": {
+        "type": "object",
+        "properties": {
+          "interval": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/braiins.hashpower.market.v2.OhlcInterval"
+              }
+            ],
+            "title": "interval",
+            "description": "Length of the interval each summary covers."
+          },
+          "limit": {
+            "type": "integer",
+            "title": "limit",
+            "description": "Maximum number of summaries. Defaults to 100; values above 1000 are\n treated as 1000. The summaries end at the interval of the most recent trade\n and start no earlier than the first trade in the last 2 × `limit` intervals\n before now, at most 30 days back, so a quiet market returns fewer."
+          }
+        },
+        "title": "ListOhlcRequest",
+        "required": [
+          "interval"
+        ],
+        "additionalProperties": false,
+        "description": "Request for `ListOhlc`."
+      },
+      "braiins.hashpower.market.v2.ListOhlcResponse": {
+        "type": "object",
+        "properties": {
+          "ohlc": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/braiins.hashpower.market.v2.Ohlc"
+            },
+            "title": "ohlc",
+            "description": "Summaries, oldest first. The last interval may still be open."
+          }
+        },
+        "title": "ListOhlcResponse",
+        "additionalProperties": false,
+        "description": "Response for `ListOhlc`."
+      },
+      "braiins.hashpower.market.v2.ListTradesRequest": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "title": "limit",
+            "description": "Number of trades to return. Defaults to 100; values above 1000 are treated\n as 1000."
+          }
+        },
+        "title": "ListTradesRequest",
+        "additionalProperties": false,
+        "description": "Request for `ListTrades`."
+      },
+      "braiins.hashpower.market.v2.ListTradesResponse": {
+        "type": "object",
+        "properties": {
+          "trades": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/braiins.hashpower.market.v2.Trade"
+            },
+            "title": "trades",
+            "description": "Trades, newest first."
+          }
+        },
+        "title": "ListTradesResponse",
+        "additionalProperties": false,
+        "description": "Response for `ListTrades`."
+      },
+      "braiins.hashpower.market.v2.MarketStats": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/braiins.hashpower.market.v2.MarketStatus"
+              }
+            ],
+            "title": "status",
+            "description": "Trading status."
+          },
+          "best_bid_price_sat": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "best_bid_price_sat",
+            "format": "int64",
+            "description": "Highest bid price. Absent when there are no bids."
+          },
+          "best_ask_price_sat": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "best_ask_price_sat",
+            "format": "int64",
+            "description": "Lowest ask price. Absent when there are no asks."
+          },
+          "last_price_sat": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "last_price_sat",
+            "format": "int64",
+            "description": "Price of the most recent trade, however long ago: the `price_sat` of the\n newest trade from `ListTrades`. Absent when no trade is known, which is\n also the case for a while after a Hashpower restart, until the next trade."
+          },
+          "volume_24h_eh_day": {
+            "type": "number",
+            "title": "volume_24h_eh_day",
+            "format": "double",
+            "description": "Volume traded during the last 24 hours, in EH·day. Cached for up to 10\n minutes."
+          },
+          "hashrate_matched_ph": {
+            "type": "number",
+            "title": "hashrate_matched_ph",
+            "format": "double",
+            "description": "Hashrate being bought, estimated over the last 10 minutes."
+          },
+          "hashrate_available_ph": {
+            "type": "number",
+            "title": "hashrate_available_ph",
+            "format": "double",
+            "description": "Hashrate offered by sellers, estimated over the last 10 minutes."
+          },
+          "as_of": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/google.protobuf.Timestamp"
+              }
+            ],
+            "title": "as_of",
+            "description": "When Hashpower published the order book the best prices and hashrates come\n from, at most 20 seconds before the call."
+          }
+        },
+        "title": "MarketStats",
+        "additionalProperties": false,
+        "description": "Market statistics."
+      },
+      "braiins.hashpower.market.v2.MarketStatus": {
+        "type": "string",
+        "title": "MarketStatus",
+        "enum": [
+          "MARKET_STATUS_UNSPECIFIED",
+          "MARKET_STATUS_OPEN",
+          "MARKET_STATUS_HALTED"
+        ],
+        "description": "Trading status of the market.\n\n - `MARKET_STATUS_OPEN`: The market is matching orders.\n - `MARKET_STATUS_HALTED`: Matching is suspended."
+      },
+      "braiins.hashpower.market.v2.Ohlc": {
+        "type": "object",
+        "properties": {
+          "start_time": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/google.protobuf.Timestamp"
+              }
+            ],
+            "title": "start_time",
+            "description": "Start of the interval."
+          },
+          "open_sat": {
+            "type": "string",
+            "title": "open_sat",
+            "format": "int64",
+            "description": "First trade price."
+          },
+          "high_sat": {
+            "type": "string",
+            "title": "high_sat",
+            "format": "int64",
+            "description": "Highest trade price."
+          },
+          "low_sat": {
+            "type": "string",
+            "title": "low_sat",
+            "format": "int64",
+            "description": "Lowest trade price."
+          },
+          "close_sat": {
+            "type": "string",
+            "title": "close_sat",
+            "format": "int64",
+            "description": "Last trade price."
+          },
+          "vwap_sat": {
+            "type": "string",
+            "title": "vwap_sat",
+            "format": "int64",
+            "description": "Volume-weighted average price."
+          },
+          "volume_eh_day": {
+            "type": "number",
+            "title": "volume_eh_day",
+            "format": "double",
+            "description": "Traded volume, in EH·day."
+          }
+        },
+        "title": "Ohlc",
+        "additionalProperties": false,
+        "description": "Price summary (open, high, low, close) for one interval. An interval without\n trades has a volume of 0, and all its prices equal the previous close."
+      },
+      "braiins.hashpower.market.v2.OhlcInterval": {
+        "type": "string",
+        "title": "OhlcInterval",
+        "enum": [
+          "OHLC_INTERVAL_UNSPECIFIED",
+          "OHLC_INTERVAL_5M",
+          "OHLC_INTERVAL_15M",
+          "OHLC_INTERVAL_1H",
+          "OHLC_INTERVAL_4H",
+          "OHLC_INTERVAL_1D"
+        ],
+        "description": "Length of the interval one OHLC summary covers.\n\n - `OHLC_INTERVAL_5M`: 5 minutes.\n - `OHLC_INTERVAL_15M`: 15 minutes.\n - `OHLC_INTERVAL_1H`: 1 hour.\n - `OHLC_INTERVAL_4H`: 4 hours.\n - `OHLC_INTERVAL_1D`: 1 day."
+      },
+      "braiins.hashpower.market.v2.OrderBook": {
+        "type": "object",
+        "properties": {
+          "bids": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/braiins.hashpower.market.v2.BidLevel"
+            },
+            "title": "bids",
+            "description": "Bid levels, highest price first."
+          },
+          "asks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/braiins.hashpower.market.v2.AskLevel"
+            },
+            "title": "asks",
+            "description": "Ask levels, lowest price first."
+          },
+          "as_of": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/google.protobuf.Timestamp"
+              }
+            ],
+            "title": "as_of",
+            "description": "When Hashpower published this order book, at most 20 seconds before the\n call."
+          }
+        },
+        "title": "OrderBook",
+        "additionalProperties": false,
+        "description": "Order book aggregated by price level."
+      },
+      "braiins.hashpower.market.v2.Trade": {
+        "type": "object",
+        "properties": {
+          "time": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/google.protobuf.Timestamp"
+              }
+            ],
+            "title": "time",
+            "description": "When the trade happened."
+          },
+          "price_sat": {
+            "type": "string",
+            "title": "price_sat",
+            "format": "int64",
+            "description": "Average price of the trade."
+          },
+          "volume_eh_day": {
+            "type": "number",
+            "title": "volume_eh_day",
+            "format": "double",
+            "description": "Traded volume, in EH·day."
+          }
+        },
+        "title": "Trade",
+        "additionalProperties": false,
+        "description": "Hashrate matched between bids and asks."
+      },
+      "braiins.hashpower.pools.v2.PoolCheckFailure": {
+        "type": "string",
+        "title": "PoolCheckFailure",
+        "enum": [
+          "POOL_CHECK_FAILURE_UNSPECIFIED",
+          "POOL_CHECK_FAILURE_DNS_UNRESOLVED",
+          "POOL_CHECK_FAILURE_TIMEOUT",
+          "POOL_CHECK_FAILURE_CONNECT_FAILED",
+          "POOL_CHECK_FAILURE_CONNECTION_CLOSED",
+          "POOL_CHECK_FAILURE_PROTOCOL_ERROR",
+          "POOL_CHECK_FAILURE_SUBSCRIBE_UNSUPPORTED",
+          "POOL_CHECK_FAILURE_EXTRANONCE2_TOO_SMALL",
+          "POOL_CHECK_FAILURE_AUTHORIZATION_REJECTED"
+        ],
+        "description": "Why a pool check did not succeed. Each value belongs to the `PoolCheckResult` in parentheses.\n New values may be added; handle an unknown value by `result`.\n\n - `POOL_CHECK_FAILURE_DNS_UNRESOLVED` (`UNREACHABLE`): The pool's host name could not be\n   resolved.\n - `POOL_CHECK_FAILURE_TIMEOUT` (`UNREACHABLE`): The pool did not complete the check in time.\n - `POOL_CHECK_FAILURE_CONNECT_FAILED` (`UNREACHABLE`): None of the pool's addresses accepted a\n   connection.\n - `POOL_CHECK_FAILURE_CONNECTION_CLOSED` (`UNREACHABLE`): The pool closed or dropped the\n   connection during the Stratum handshake.\n - `POOL_CHECK_FAILURE_PROTOCOL_ERROR` (`UNREACHABLE`): The pool did not follow the Stratum V1\n   protocol, for example it sent malformed or oversized messages.\n - `POOL_CHECK_FAILURE_SUBSCRIBE_UNSUPPORTED` (`INCOMPATIBLE`): The pool's `mining.subscribe`\n   response has no extranonce2 size.\n - `POOL_CHECK_FAILURE_EXTRANONCE2_TOO_SMALL` (`INCOMPATIBLE`): The pool's extranonce2 size is\n   smaller than Hashpower needs.\n - `POOL_CHECK_FAILURE_AUTHORIZATION_REJECTED` (`UNAUTHORIZED`): The pool rejected the worker in\n   `mining.authorize`."
+      },
+      "braiins.hashpower.pools.v2.PoolCheckResult": {
+        "type": "string",
+        "title": "PoolCheckResult",
+        "enum": [
+          "POOL_CHECK_RESULT_UNSPECIFIED",
+          "POOL_CHECK_RESULT_OK",
+          "POOL_CHECK_RESULT_UNREACHABLE",
+          "POOL_CHECK_RESULT_UNAUTHORIZED",
+          "POOL_CHECK_RESULT_INCOMPATIBLE"
+        ],
+        "description": "Outcome of a pool check. Unless the result is `POOL_CHECK_RESULT_OK`, `failure` says why;\n on `POOL_CHECK_RESULT_OK` it is absent.\n\n - `POOL_CHECK_RESULT_OK`: The pool accepted a test Stratum V1 connection and worker from\n   Hashpower. Pools that are not `stratum+tcp` are not contacted and carry the\n   `POOL_WARNING_CODE_NOT_CHECKED` warning.\n - `POOL_CHECK_RESULT_UNREACHABLE`: The pool did not respond or did not complete the Stratum\n   handshake.\n - `POOL_CHECK_RESULT_UNAUTHORIZED`: The pool rejected the worker.\n - `POOL_CHECK_RESULT_INCOMPATIBLE`: The pool's stratum settings are not supported by Hashpower."
+      },
+      "braiins.hashpower.pools.v2.PoolErrorReason": {
+        "type": "string",
+        "title": "PoolErrorReason",
+        "enum": [
+          "POOL_ERROR_REASON_UNSPECIFIED",
+          "UNSUPPORTED_CREDENTIAL",
+          "INSUFFICIENT_SCOPE",
+          "ACCOUNT_NOT_GRANTED",
+          "INVALID_POOL_URL"
+        ],
+        "description": "Values of `google.rpc.ErrorInfo.reason` returned by `PoolService`. The error\n domain is `hashpower.braiins.com`. New reasons may be added; handle unknown\n reasons by their gRPC/HTTP status.\n\n - `UNSUPPORTED_CREDENTIAL` (401/403): Hashpower could not verify or accept\n   the request's authentication. Invalid API keys and keys for another product\n   are rejected with HTTP 401 at the gateway, without an `ErrorInfo.reason`.\n - `INSUFFICIENT_SCOPE` (403): The OAuth token lacks the `hashpower:read` scope.\n - `ACCOUNT_NOT_GRANTED` (403): The credential has no Hashpower account it can view.\n - `INVALID_POOL_URL` (400): The pool URL is malformed or points to an address Hashpower does not\n   connect to."
+      },
+      "braiins.hashpower.pools.v2.PoolWarning": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/braiins.hashpower.pools.v2.PoolWarningCode"
+              }
+            ],
+            "title": "code",
+            "description": "Kind of problem."
+          },
+          "message": {
+            "type": "string",
+            "title": "message",
+            "description": "Explanation of the problem. Human-readable; the text may change."
+          }
+        },
+        "title": "PoolWarning",
+        "additionalProperties": false,
+        "description": "A problem that does not prevent delivery."
+      },
+      "braiins.hashpower.pools.v2.PoolWarningCode": {
+        "type": "string",
+        "title": "PoolWarningCode",
+        "enum": [
+          "POOL_WARNING_CODE_UNSPECIFIED",
+          "POOL_WARNING_CODE_DIFFICULTY_UNKNOWN",
+          "POOL_WARNING_CODE_DIFFICULTY_BELOW_MINIMUM",
+          "POOL_WARNING_CODE_NOT_CHECKED"
+        ],
+        "description": "Kind of a `PoolWarning`. New values may be added; show `message` for an unknown value.\n\n - `POOL_WARNING_CODE_DIFFICULTY_UNKNOWN`: The pool set no share difficulty during the check\n   (`difficulty` is absent), so it could not be compared with the recommended minimum.\n - `POOL_WARNING_CODE_DIFFICULTY_BELOW_MINIMUM`: The pool's share difficulty (`difficulty`) is\n   below the recommended minimum of 8000.\n - `POOL_WARNING_CODE_NOT_CHECKED`: Hashpower checks only `stratum+tcp` pools. This pool was not\n   contacted; the result covers the URL and worker format and, if the host resolved, that it\n   has a public address."
+      },
+      "braiins.hashpower.pools.v2.ValidatePoolRequest": {
+        "type": "object",
+        "properties": {
+          "pool_url": {
+            "type": "string",
+            "title": "pool_url",
+            "description": "Pool URL: `[scheme://]host[:port][/key]`. The scheme is `stratum+tcp`\n (the default), `stratum+tcp+secure`, `stratum2+tcp` or\n `stratum2+tcp+insecure`. The host is a DNS name or a public IPv4 address.\n Without a port, Stratum V1 schemes use 3333 and Stratum V2 schemes 3336.\n `stratum+tcp+secure` and `stratum2+tcp` need the pool's authority public\n key as the path; the other schemes take no path. For example\n `stratum+tcp://stratum.braiins.com:3333`."
+          },
+          "worker": {
+            "type": "string",
+            "title": "worker",
+            "description": "Worker name the pool credits: 1 to 255 bytes, without whitespace or\n control characters. Surrounding whitespace is ignored."
+          }
+        },
+        "title": "ValidatePoolRequest",
+        "required": [
+          "pool_url",
+          "worker"
+        ],
+        "additionalProperties": false,
+        "description": "Request for `ValidatePool`."
+      },
+      "braiins.hashpower.pools.v2.ValidatePoolResponse": {
+        "type": "object",
+        "properties": {
+          "result": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/braiins.hashpower.pools.v2.PoolCheckResult"
+              }
+            ],
+            "title": "result",
+            "description": "Outcome of the check."
+          },
+          "failure": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/braiins.hashpower.pools.v2.PoolCheckFailure"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "failure",
+            "description": "Why the check did not succeed. Absent when `result` is\n `POOL_CHECK_RESULT_OK`, set otherwise."
+          },
+          "normalized_pool_url": {
+            "type": "string",
+            "title": "normalized_pool_url",
+            "description": "Canonical form of the pool URL. Use it when placing a bid."
+          },
+          "difficulty": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "difficulty",
+            "format": "double",
+            "description": "Share difficulty the pool set during the check. Absent when the pool set\n none, was not contacted, or was unreachable."
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/braiins.hashpower.pools.v2.PoolWarning"
+            },
+            "title": "warnings",
+            "description": "Problems that do not prevent delivery."
+          },
+          "message": {
+            "type": "string",
+            "title": "message",
+            "description": "Explanation of the result. Human-readable; the text may change."
+          }
+        },
+        "title": "ValidatePoolResponse",
+        "additionalProperties": false,
+        "description": "Response for `ValidatePool`."
+      },
+      "braiins.hashpower.trading.v2.Account": {
+        "type": "object",
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "title": "account_id",
+            "description": "Account identifier (UUID). Use it in every path with `{account_id}`."
+          },
+          "display_name": {
+            "type": "string",
+            "title": "display_name",
+            "description": "Name of the account in Braiins ID. It is not unique and can change, so\n identify the account by `account_id`."
+          }
+        },
+        "title": "Account",
+        "additionalProperties": false,
+        "description": "A Hashpower account the token may act on."
+      },
+      "braiins.hashpower.trading.v2.Balance": {
+        "type": "object",
+        "properties": {
+          "total_sat": {
+            "type": "string",
+            "title": "total_sat",
+            "format": "int64",
+            "description": "Total funds, including blocked funds."
+          },
+          "available_sat": {
+            "type": "string",
+            "title": "available_sat",
+            "format": "int64",
+            "description": "Funds available for new bids and budget increases."
+          },
+          "blocked_sat": {
+            "type": "string",
+            "title": "blocked_sat",
+            "format": "int64",
+            "description": "Funds blocked for current bids and contracts."
+          }
+        },
+        "title": "Balance",
+        "additionalProperties": false,
+        "description": "Account balance in satoshis."
+      },
+      "braiins.hashpower.trading.v2.Bid": {
+        "type": "object",
+        "properties": {
+          "bid_id": {
+            "type": "string",
+            "title": "bid_id",
+            "description": "Bid identifier, for example `B1234`."
+          },
+          "state": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/braiins.hashpower.trading.v2.BidState"
+              }
+            ],
+            "title": "state",
+            "description": "Current lifecycle state."
+          },
+          "destination": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/braiins.hashpower.trading.v2.Destination"
+              }
+            ],
+            "title": "destination",
+            "description": "Pool and worker receiving the hashrate, as placed. A bid placed through the\n legacy v1 API can show a destination in a form `PlaceBid` does not accept."
+          },
+          "price_sat": {
+            "type": "string",
+            "title": "price_sat",
+            "format": "int64",
+            "description": "Maximum price the bid pays."
+          },
+          "amount_sat": {
+            "type": "string",
+            "title": "amount_sat",
+            "format": "int64",
+            "description": "Total budget of the bid."
+          },
+          "speed_limit_ph": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "speed_limit_ph",
+            "format": "double",
+            "description": "Maximum hashrate the bid buys. Absent when unlimited."
+          },
+          "memo": {
+            "type": "string",
+            "title": "memo",
+            "description": "Free-text note set by the owner."
+          },
+          "fee_rate_pct": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "fee_rate_pct",
+            "format": "double",
+            "description": "Fee rate applied to this bid, in percent. Absent in `BID_STATE_CREATING`."
+          },
+          "settled": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/braiins.hashpower.trading.v2.BidProgress"
+              }
+            ],
+            "title": "settled",
+            "description": "Spending confirmed by settlement. Lags `estimated` by up to a few minutes."
+          },
+          "estimated": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/braiins.hashpower.trading.v2.BidProgress"
+              }
+            ],
+            "title": "estimated",
+            "description": "Real-time spending estimate. May be revised by settlement."
+          },
+          "amount_remaining_sat": {
+            "type": "string",
+            "title": "amount_remaining_sat",
+            "format": "int64",
+            "description": "Unspent budget, from the real-time estimate."
+          },
+          "progress_pct": {
+            "type": "number",
+            "title": "progress_pct",
+            "format": "double",
+            "description": "Share of the budget spent, 0 to 100, from the real-time estimate."
+          },
+          "avg_speed_ph": {
+            "type": "number",
+            "title": "avg_speed_ph",
+            "format": "double",
+            "description": "Hashrate currently delivered to the destination."
+          },
+          "pause_reason": {
+            "type": "string",
+            "title": "pause_reason",
+            "description": "Why the bid is paused. Set only in `BID_STATE_PAUSED`. Human-readable;\n the text may change."
+          },
+          "degradation": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/braiins.hashpower.trading.v2.Degradation"
+              }
+            ],
+            "title": "degradation",
+            "description": "Set while the bid's speed is limited because of delivery problems."
+          },
+          "create_time": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/google.protobuf.Timestamp"
+              }
+            ],
+            "title": "create_time",
+            "description": "When the bid was placed."
+          },
+          "update_time": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/google.protobuf.Timestamp"
+              }
+            ],
+            "title": "update_time",
+            "description": "When the bid last changed: an edit of its terms or memo, a cancellation\n request by its owner, or a change of its `degradation`. Pauses and\n cancellations by Hashpower do not change it. Until the first change, the\n time the bid was placed."
+          }
+        },
+        "title": "Bid",
+        "additionalProperties": false,
+        "description": "A spot market bid. Prices are in satoshis per EH/day; amounts are in\n satoshis; hashrates are in PH/s."
+      },
+      "braiins.hashpower.trading.v2.BidProgress": {
+        "type": "object",
+        "properties": {
+          "amount_consumed_sat": {
+            "type": "string",
+            "title": "amount_consumed_sat",
+            "format": "int64",
+            "description": "Budget spent on hashrate, including fees."
+          },
+          "fee_paid_sat": {
+            "type": "string",
+            "title": "fee_paid_sat",
+            "format": "int64",
+            "description": "Fees paid."
+          }
+        },
+        "title": "BidProgress",
+        "additionalProperties": false,
+        "description": "Money a bid has spent, in satoshis."
+      },
+      "braiins.hashpower.trading.v2.BidState": {
+        "type": "string",
+        "title": "BidState",
+        "enum": [
+          "BID_STATE_UNSPECIFIED",
+          "BID_STATE_CREATED",
+          "BID_STATE_ACTIVE",
+          "BID_STATE_PAUSED",
+          "BID_STATE_FROZEN",
+          "BID_STATE_CANCELING",
+          "BID_STATE_CANCELED",
+          "BID_STATE_FULFILLED",
+          "BID_STATE_CREATING",
+          "BID_STATE_UPDATING"
+        ],
+        "description": "Lifecycle state of a bid. New states may be added; treat unknown values as\n \"not finished\".\n\n - `BID_STATE_CREATED`: Accepted by the market but not yet matching.\n - `BID_STATE_ACTIVE`: Matching and buying hashrate.\n - `BID_STATE_PAUSED`: Temporarily not buying hashrate; see `pause_reason`.\n - `BID_STATE_FROZEN`: Stopped by Braiins; contact support.\n - `BID_STATE_CANCELING`: Cancellation requested and in progress.\n - `BID_STATE_CANCELED`: Cancelled. Final state.\n - `BID_STATE_FULFILLED`: Budget fully spent. Final state.\n - `BID_STATE_CREATING`: Returned only by `PlaceBid`: the market accepted the\n   bid, but it cannot be read yet. The bid has its `bid_id`, the requested\n   destination, price, budget, speed limit and memo, and\n   `amount_remaining_sat` equal to the budget. `fee_rate_pct`, `settled`,\n   `estimated`, `create_time` and `update_time` are absent, and\n   `progress_pct` and `avg_speed_ph` are 0. `GetBid` returns the bid within\n   seconds, usually as `BID_STATE_CREATED`; until then `GetBid`, `UpdateBid`\n   and `CancelBid` may answer `BID_NOT_FOUND`.\n - `BID_STATE_UPDATING`: Returned only by `UpdateBid`: the market accepted the\n   change, but the bid does not show it yet. The returned bid has the\n   requested terms; `GetBid` shows them within seconds with the bid's state,\n   unless a later change replaces them first."
+      },
+      "braiins.hashpower.trading.v2.CancelBidRequest": {
+        "type": "object",
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "title": "account_id",
+            "description": "Account identifier from `ListAccounts`."
+          },
+          "bid_id": {
+            "type": "string",
+            "title": "bid_id",
+            "description": "Bid identifier."
+          },
+          "request_id": {
+            "type": "string",
+            "title": "request_id",
+            "description": "Idempotency key: a UUID you generate for each change, for example a random\n UUID v4. Reuse it only to retry the same request after a timeout, a 429 or\n 5xx response, or `OUTCOME_PENDING`; reusing it with a different body fails\n with `REQUEST_ID_REUSED`."
+          }
+        },
+        "title": "CancelBidRequest",
+        "required": [
+          "account_id",
+          "bid_id",
+          "request_id"
+        ],
+        "additionalProperties": false,
+        "description": "Request for `CancelBid`."
+      },
+      "braiins.hashpower.trading.v2.Degradation": {
+        "type": "object",
+        "properties": {
+          "since": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/google.protobuf.Timestamp"
+              }
+            ],
+            "title": "since",
+            "description": "When the limitation started."
+          },
+          "reason": {
+            "type": "string",
+            "title": "reason",
+            "description": "Why the bid is limited. Human-readable; the text may change."
+          },
+          "speed_limit_ph": {
+            "type": "number",
+            "title": "speed_limit_ph",
+            "format": "double",
+            "description": "Temporary speed limit in PH/s."
+          }
+        },
+        "title": "Degradation",
+        "additionalProperties": false,
+        "description": "Speed limitation applied while the destination has delivery problems."
+      },
+      "braiins.hashpower.trading.v2.DepositStatus": {
+        "type": "string",
+        "title": "DepositStatus",
+        "enum": [
+          "DEPOSIT_STATUS_UNSPECIFIED",
+          "DEPOSIT_STATUS_DETECTED",
+          "DEPOSIT_STATUS_CREDITED",
+          "DEPOSIT_STATUS_AML_HOLD",
+          "DEPOSIT_STATUS_RETURNED",
+          "DEPOSIT_STATUS_ORPHANED"
+        ],
+        "description": "Processing state of a deposit. New states may be added; treat unknown values\n as \"not credited\".\n\n - `DEPOSIT_STATUS_DETECTED`: Seen on the blockchain; not credited yet.\n - `DEPOSIT_STATUS_CREDITED`: Confirmed and credited to the available funds.\n - `DEPOSIT_STATUS_AML_HOLD`: Held for a compliance review; not credited.\n - `DEPOSIT_STATUS_RETURNED`: Sent back after the review; see `return_tx_id`.\n - `DEPOSIT_STATUS_ORPHANED`: No longer in the main chain, usually after a\n   reorganization; not credited. It can be detected again."
+      },
+      "braiins.hashpower.trading.v2.Destination": {
+        "type": "object",
+        "properties": {
+          "pool_url": {
+            "type": "string",
+            "title": "pool_url",
+            "description": "Pool URL: `[scheme://]host[:port][/key]`. The scheme is `stratum+tcp` (the\n default), `stratum+tcp+secure`, `stratum2+tcp` or `stratum2+tcp+insecure`.\n The host is a DNS name or a public IPv4 address. A host whose last label is\n a number, such as `0x7f000001`, must be a dotted-decimal address, and\n `localhost`, `local`, `internal`, `home.arpa` and the names under them are\n not accepted. Without a port, Stratum V1 schemes use 3333 and Stratum V2\n schemes 3336. `stratum+tcp+secure` and `stratum2+tcp` need the pool's\n authority public key as the path; the other schemes take no path. For\n example `stratum+tcp://stratum.braiins.com:3333`."
+          },
+          "worker": {
+            "type": "string",
+            "title": "worker",
+            "description": "Worker name the pool credits: 1 to 255 bytes, without whitespace or\n control characters. Surrounding whitespace is ignored."
+          }
+        },
+        "title": "Destination",
+        "required": [
+          "pool_url",
+          "worker"
+        ],
+        "additionalProperties": false,
+        "description": "Where a bid's hashrate is delivered."
+      },
+      "braiins.hashpower.trading.v2.GetBalanceRequest": {
+        "type": "object",
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "title": "account_id",
+            "description": "Account identifier from `ListAccounts`."
+          }
+        },
+        "title": "GetBalanceRequest",
+        "required": [
+          "account_id"
+        ],
+        "additionalProperties": false,
+        "description": "Request for `GetBalance`."
+      },
+      "braiins.hashpower.trading.v2.GetBidRequest": {
+        "type": "object",
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "title": "account_id",
+            "description": "Account identifier from `ListAccounts`."
+          },
+          "bid_id": {
+            "type": "string",
+            "title": "bid_id",
+            "description": "Bid identifier."
+          }
+        },
+        "title": "GetBidRequest",
+        "required": [
+          "account_id",
+          "bid_id"
+        ],
+        "additionalProperties": false,
+        "description": "Request for `GetBid`."
+      },
+      "braiins.hashpower.trading.v2.GetSpotFeesRequest": {
+        "type": "object",
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "title": "account_id",
+            "description": "Account identifier from `ListAccounts`."
+          }
+        },
+        "title": "GetSpotFeesRequest",
+        "required": [
+          "account_id"
+        ],
+        "additionalProperties": false,
+        "description": "Request for `GetSpotFees`."
+      },
+      "braiins.hashpower.trading.v2.GetSpotSettingsRequest": {
+        "type": "object",
+        "title": "GetSpotSettingsRequest",
+        "additionalProperties": false,
+        "description": "Request for `GetSpotSettings`."
+      },
+      "braiins.hashpower.trading.v2.ListAccountsRequest": {
+        "type": "object",
+        "properties": {
+          "page_size": {
+            "type": "integer",
+            "title": "page_size",
+            "format": "int32",
+            "description": "Maximum number of accounts to return. Defaults to 50; values above 100 are\n treated as 100."
+          },
+          "page_token": {
+            "type": "string",
+            "title": "page_token",
+            "description": "`next_page_token` from a previous response, to fetch the next page."
+          }
+        },
+        "title": "ListAccountsRequest",
+        "additionalProperties": false,
+        "description": "Request for `ListAccounts`."
+      },
+      "braiins.hashpower.trading.v2.ListAccountsResponse": {
+        "type": "object",
+        "properties": {
+          "accounts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/braiins.hashpower.trading.v2.Account"
+            },
+            "title": "accounts",
+            "description": "Accounts this token may act on."
+          },
+          "next_page_token": {
+            "type": "string",
+            "title": "next_page_token",
+            "description": "Token for the next page; empty on the last page."
+          }
+        },
+        "title": "ListAccountsResponse",
+        "additionalProperties": false,
+        "description": "Response for `ListAccounts`."
+      },
+      "braiins.hashpower.trading.v2.ListBidsRequest": {
+        "type": "object",
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "title": "account_id",
+            "description": "Account identifier from `ListAccounts`."
+          },
+          "current_only": {
+            "type": "boolean",
+            "title": "current_only",
+            "description": "Return only current bids: created, active, paused, frozen or canceling."
+          },
+          "page_size": {
+            "type": "integer",
+            "title": "page_size",
+            "format": "int32",
+            "description": "Maximum number of bids to return. Defaults to 50; values above 500 are\n treated as 500."
+          },
+          "page_token": {
+            "type": "string",
+            "title": "page_token",
+            "description": "`next_page_token` from a previous response, to fetch the next page."
+          }
+        },
+        "title": "ListBidsRequest",
+        "required": [
+          "account_id"
+        ],
+        "additionalProperties": false,
+        "description": "Request for `ListBids`."
+      },
+      "braiins.hashpower.trading.v2.ListBidsResponse": {
+        "type": "object",
+        "properties": {
+          "bids": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/braiins.hashpower.trading.v2.Bid"
+            },
+            "title": "bids",
+            "description": "Bids, newest first."
+          },
+          "next_page_token": {
+            "type": "string",
+            "title": "next_page_token",
+            "description": "Token for the next page; empty on the last page."
+          }
+        },
+        "title": "ListBidsResponse",
+        "additionalProperties": false,
+        "description": "Response for `ListBids`."
+      },
+      "braiins.hashpower.trading.v2.ListOnChainTransactionsRequest": {
+        "type": "object",
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "title": "account_id",
+            "description": "Account identifier from `ListAccounts`."
+          },
+          "page_size": {
+            "type": "integer",
+            "title": "page_size",
+            "format": "int32",
+            "description": "Maximum number of transactions to return. Defaults to 50; values above\n 100 are treated as 100."
+          },
+          "page_token": {
+            "type": "string",
+            "title": "page_token",
+            "description": "`next_page_token` from a previous response, to fetch the next page."
+          }
+        },
+        "title": "ListOnChainTransactionsRequest",
+        "required": [
+          "account_id"
+        ],
+        "additionalProperties": false,
+        "description": "Request for `ListOnChainTransactions`."
+      },
+      "braiins.hashpower.trading.v2.ListOnChainTransactionsResponse": {
+        "type": "object",
+        "properties": {
+          "transactions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/braiins.hashpower.trading.v2.OnChainTransaction"
+            },
+            "title": "transactions",
+            "description": "Transactions, newest first."
+          },
+          "next_page_token": {
+            "type": "string",
+            "title": "next_page_token",
+            "description": "Token for the next page; empty on the last page."
+          }
+        },
+        "title": "ListOnChainTransactionsResponse",
+        "additionalProperties": false,
+        "description": "Response for `ListOnChainTransactions`."
+      },
+      "braiins.hashpower.trading.v2.ListTransactionsRequest": {
+        "type": "object",
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "title": "account_id",
+            "description": "Account identifier from `ListAccounts`."
+          },
+          "bid_id": {
+            "type": "string",
+            "title": "bid_id",
+            "description": "Return only the movements of this bid, for example `B1234`."
+          },
+          "page_size": {
+            "type": "integer",
+            "title": "page_size",
+            "format": "int32",
+            "description": "Maximum number of movements to return. Defaults to 50; values above 500\n are treated as 500."
+          },
+          "page_token": {
+            "type": "string",
+            "title": "page_token",
+            "description": "`next_page_token` from a previous response, to fetch the next page."
+          }
+        },
+        "title": "ListTransactionsRequest",
+        "required": [
+          "account_id"
+        ],
+        "additionalProperties": false,
+        "description": "Request for `ListTransactions`."
+      },
+      "braiins.hashpower.trading.v2.ListTransactionsResponse": {
+        "type": "object",
+        "properties": {
+          "transactions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/braiins.hashpower.trading.v2.Transaction"
+            },
+            "title": "transactions",
+            "description": "Movements, newest first."
+          },
+          "next_page_token": {
+            "type": "string",
+            "title": "next_page_token",
+            "description": "Token for the next page; empty on the last page."
+          }
+        },
+        "title": "ListTransactionsResponse",
+        "additionalProperties": false,
+        "description": "Response for `ListTransactions`."
+      },
+      "braiins.hashpower.trading.v2.OnChainTransaction": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/braiins.hashpower.trading.v2.OnChainTransactionType"
+              }
+            ],
+            "title": "type",
+            "description": "What the transaction is."
+          },
+          "time": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/google.protobuf.Timestamp"
+              }
+            ],
+            "title": "time",
+            "description": "When the deposit was detected, or when the withdrawal was requested or\n confirmed."
+          },
+          "amount_sat": {
+            "type": "string",
+            "title": "amount_sat",
+            "format": "int64",
+            "description": "Amount; always positive."
+          },
+          "tx_id": {
+            "type": "string",
+            "title": "tx_id",
+            "description": "Bitcoin transaction ID. Empty for a withdrawal request."
+          },
+          "output_index": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "title": "output_index",
+            "description": "Index of the transaction output. Absent for a withdrawal request."
+          },
+          "address": {
+            "type": "string",
+            "title": "address",
+            "description": "The account's deposit address, or the withdrawal's destination address."
+          },
+          "deposit_status": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/braiins.hashpower.trading.v2.DepositStatus"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "deposit_status",
+            "description": "Processing state of a deposit. Absent for withdrawals."
+          },
+          "return_tx_id": {
+            "type": "string",
+            "title": "return_tx_id",
+            "description": "Bitcoin transaction that returned the deposit. Set only when\n `deposit_status` is `DEPOSIT_STATUS_RETURNED`."
+          }
+        },
+        "title": "OnChainTransaction",
+        "additionalProperties": false,
+        "description": "A deposit to the account or a withdrawal from it on the Bitcoin blockchain.\n Amounts are in satoshis."
+      },
+      "braiins.hashpower.trading.v2.OnChainTransactionType": {
+        "type": "string",
+        "title": "OnChainTransactionType",
+        "enum": [
+          "ON_CHAIN_TRANSACTION_TYPE_UNSPECIFIED",
+          "ON_CHAIN_TRANSACTION_TYPE_DEPOSIT",
+          "ON_CHAIN_TRANSACTION_TYPE_WITHDRAWAL_REQUEST",
+          "ON_CHAIN_TRANSACTION_TYPE_WITHDRAWAL_CONFIRMATION"
+        ],
+        "description": "Kind of on-chain transaction. New kinds may be added.\n\n - `ON_CHAIN_TRANSACTION_TYPE_DEPOSIT`: Bitcoin sent to the account's deposit address.\n - `ON_CHAIN_TRANSACTION_TYPE_WITHDRAWAL_REQUEST`: A withdrawal was requested and its amount\n   left the available funds.\n - `ON_CHAIN_TRANSACTION_TYPE_WITHDRAWAL_CONFIRMATION`: The withdrawal's Bitcoin transaction\n   was confirmed."
+      },
+      "braiins.hashpower.trading.v2.PlaceBidRequest": {
+        "type": "object",
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "title": "account_id",
+            "description": "Account identifier from `ListAccounts`."
+          },
+          "request_id": {
+            "type": "string",
+            "title": "request_id",
+            "description": "Idempotency key: a UUID you generate for each change, for example a random\n UUID v4. Reuse it only to retry the same request after a timeout, a 429 or\n 5xx response, or `OUTCOME_PENDING`; reusing it with a different body fails\n with `REQUEST_ID_REUSED`."
+          },
+          "destination": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/braiins.hashpower.trading.v2.Destination"
+              }
+            ],
+            "title": "destination",
+            "description": "Pool and worker receiving the hashrate."
+          },
+          "price_sat": {
+            "type": "string",
+            "title": "price_sat",
+            "format": "int64",
+            "description": "Maximum price to pay, in satoshis per EH/day."
+          },
+          "amount_sat": {
+            "type": "string",
+            "title": "amount_sat",
+            "format": "int64",
+            "description": "Total budget, in satoshis."
+          },
+          "speed_limit_ph": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "speed_limit_ph",
+            "format": "double",
+            "description": "Maximum hashrate to buy, in PH/s. Omit for no limit."
+          },
+          "memo": {
+            "type": "string",
+            "title": "memo",
+            "description": "Free-text note."
+          }
+        },
+        "title": "PlaceBidRequest",
+        "required": [
+          "account_id",
+          "request_id",
+          "destination",
+          "price_sat",
+          "amount_sat"
+        ],
+        "additionalProperties": false,
+        "description": "Request for `PlaceBid`."
+      },
+      "braiins.hashpower.trading.v2.SpotFees": {
+        "type": "object",
+        "properties": {
+          "fee_rate_pct": {
+            "type": "number",
+            "title": "fee_rate_pct",
+            "format": "double",
+            "description": "Fee charged on the hashrate a bid buys, in percent of the amount spent."
+          }
+        },
+        "title": "SpotFees",
+        "additionalProperties": false,
+        "description": "The account's spot trading fees."
+      },
+      "braiins.hashpower.trading.v2.SpotSettings": {
+        "type": "object",
+        "properties": {
+          "tick_size_sat": {
+            "type": "string",
+            "title": "tick_size_sat",
+            "format": "int64",
+            "description": "Prices must be a multiple of this value."
+          },
+          "min_price_sat": {
+            "type": "string",
+            "title": "min_price_sat",
+            "format": "int64",
+            "description": "Lowest allowed bid price."
+          },
+          "max_price_sat": {
+            "type": "string",
+            "title": "max_price_sat",
+            "format": "int64",
+            "description": "Highest allowed bid price."
+          },
+          "min_amount_sat": {
+            "type": "string",
+            "title": "min_amount_sat",
+            "format": "int64",
+            "description": "Smallest budget for a bid without a speed limit."
+          },
+          "max_amount_sat": {
+            "type": "string",
+            "title": "max_amount_sat",
+            "format": "int64",
+            "description": "Largest budget for a bid without a speed limit."
+          },
+          "min_limited_amount_sat": {
+            "type": "string",
+            "title": "min_limited_amount_sat",
+            "format": "int64",
+            "description": "Smallest budget for a bid with a speed limit."
+          },
+          "max_limited_amount_sat": {
+            "type": "string",
+            "title": "max_limited_amount_sat",
+            "format": "int64",
+            "description": "Largest budget for a bid with a speed limit."
+          },
+          "min_limited_duration": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/google.protobuf.Duration"
+              }
+            ],
+            "title": "min_limited_duration",
+            "description": "Shortest duration a bid with a speed limit must be able to run at its\n limit and price before its budget is spent."
+          },
+          "min_speed_limit_ph": {
+            "type": "number",
+            "title": "min_speed_limit_ph",
+            "format": "double",
+            "description": "Lowest allowed speed limit."
+          },
+          "max_speed_limit_ph": {
+            "type": "number",
+            "title": "max_speed_limit_ph",
+            "format": "double",
+            "description": "Highest allowed speed limit."
+          },
+          "max_current_bids": {
+            "type": "integer",
+            "title": "max_current_bids",
+            "description": "Maximum number of created, active and paused bids per account. Frozen and\n canceling bids, which `ListBids` with `current_only` also returns, do not\n count."
+          },
+          "cancel_grace_period": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/google.protobuf.Duration"
+              }
+            ],
+            "title": "cancel_grace_period",
+            "description": "Minimum bid age before it can be cancelled."
+          },
+          "price_decrease_interval": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/google.protobuf.Duration"
+              }
+            ],
+            "title": "price_decrease_interval",
+            "description": "Minimum time between two price decreases of the same bid."
+          },
+          "speed_limit_decrease_interval": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/google.protobuf.Duration"
+              }
+            ],
+            "title": "speed_limit_decrease_interval",
+            "description": "Minimum time between two speed-limit decreases of the same bid."
+          }
+        },
+        "title": "SpotSettings",
+        "additionalProperties": false,
+        "description": "Spot market settings: the limits a bid must respect. Prices are in satoshis\n per EH/day; amounts are in satoshis; speed limits are in PH/s. An upper bound\n the market does not limit is reported as the largest value the API accepts:\n 9007199254740991 (2^53 - 1) for prices and amounts, about 1.8e293 (the\n largest double divided by 10^15, so that the limit is a finite number of H/s)\n for the speed limit and 4294967295 for `max_current_bids`. A lower bound the\n market does not limit is reported as the smallest valid value:\n `tick_size_sat` for the price, 1 for amounts, and 0 for the speed limit and\n every duration."
+      },
+      "braiins.hashpower.trading.v2.TradingErrorReason": {
+        "type": "string",
+        "title": "TradingErrorReason",
+        "enum": [
+          "TRADING_ERROR_REASON_UNSPECIFIED",
+          "UNSUPPORTED_CREDENTIAL",
+          "INSUFFICIENT_SCOPE",
+          "ACCOUNT_NOT_GRANTED",
+          "BID_NOT_FOUND",
+          "PRICE_OUT_OF_RANGE",
+          "PRICE_NOT_ON_TICK",
+          "AMOUNT_OUT_OF_RANGE",
+          "SPEED_LIMIT_OUT_OF_RANGE",
+          "AMOUNT_DECREASE_NOT_ALLOWED",
+          "INVALID_DESTINATION",
+          "INSUFFICIENT_FUNDS",
+          "TOO_MANY_CURRENT_BIDS",
+          "MARKET_HALTED",
+          "BID_NOT_MODIFIABLE",
+          "CANCEL_GRACE_PERIOD",
+          "DECREASE_TOO_SOON",
+          "REQUEST_ID_REUSED",
+          "OUTCOME_PENDING",
+          "DURATION_TOO_SHORT",
+          "BID_NOT_READY",
+          "INSUFFICIENT_PERMISSION"
+        ],
+        "description": "Values of `google.rpc.ErrorInfo.reason` returned by `AccountService` and\n `BidService`. The error domain is `hashpower.braiins.com`. New reasons may be\n added; handle unknown reasons by their gRPC/HTTP status. Except for\n `OUTCOME_PENDING`, retry a failed change with a new `request_id`.\n\n - `UNSUPPORTED_CREDENTIAL` (401/403): Hashpower could not verify or accept\n   the request's authentication. Invalid API keys and keys for another product\n   are rejected with HTTP 401 at the gateway, without an `ErrorInfo.reason`.\n - `INSUFFICIENT_SCOPE` (403): The OAuth token lacks `hashpower:read` for reads or\n   `hashpower:write` for bid changes. API-key permissions are checked separately.\n - `ACCOUNT_NOT_GRANTED` (403): This credential cannot access the requested\n   account, including when its access has been revoked.\n - `INSUFFICIENT_PERMISSION` (403): The API key can read its own account but\n   cannot change bids. A denied read or lost account access returns\n   `ACCOUNT_NOT_GRANTED` instead.\n - `BID_NOT_FOUND` (404): The bid does not exist in this account, or was placed moments ago\n   and cannot be read yet (see `BID_STATE_CREATING`).\n - `PRICE_OUT_OF_RANGE` (400): The price is outside the range in `SpotSettings`.\n - `PRICE_NOT_ON_TICK` (400): The price is not a multiple of `SpotSettings.tick_size_sat`.\n - `AMOUNT_OUT_OF_RANGE` (400): The budget is outside the range in `SpotSettings`.\n - `SPEED_LIMIT_OUT_OF_RANGE` (400): The speed limit is outside the range in `SpotSettings`.\n - `AMOUNT_DECREASE_NOT_ALLOWED` (400): A budget cannot be lowered.\n - `INVALID_DESTINATION` (400): The destination pool URL or worker breaks the rules of\n   `Destination`; the message names the problem.\n - `INSUFFICIENT_FUNDS` (400): The account's available balance is too low.\n - `TOO_MANY_CURRENT_BIDS` (400): The account already has `SpotSettings.max_current_bids`\n   created, active or paused bids.\n - `MARKET_HALTED` (400): The market is halted.\n - `BID_NOT_MODIFIABLE` (400): The bid is in a state that does not allow this change.\n - `CANCEL_GRACE_PERIOD` (400): The bid is younger than the cancel grace period.\n - `DECREASE_TOO_SOON` (400): A price or speed-limit decrease happened too recently.\n - `REQUEST_ID_REUSED` (409): The `request_id` was already used with a different request body.\n - `OUTCOME_PENDING` (503): The outcome of the change is not known. Retry with the same\n   `request_id`; the change is never applied twice. While the change is still executing, a\n   retry returns its outcome once it is known.\n   If retries still return `OUTCOME_PENDING` after a minute, keep the original request\n   record. For an update or cancellation, call `GetBid`. If that read fails, handle the read\n   error before deciding to resubmit.\n\n   For an update, compare the fields you requested with the returned bid. If they match, no\n   further update is needed. Otherwise, if the update is still intended, submit it again with\n   a new `request_id`. Do not replay an outdated update after a later change to the bid. The\n   new command is subject to normal validation.\n\n   For a cancellation, do not resend if the bid is `BID_STATE_CANCELING`,\n   `BID_STATE_CANCELED`, or `BID_STATE_FULFILLED`. Otherwise, if cancellation is still\n   intended, submit it again with a new `request_id`, subject to normal validation.\n\n   For a placement, list all bids with `current_only=false`, including terminal bids. Page\n   backward until the results cover the first attempt, allowing for clock skew, and compare\n   the placement's terms. A unique memo chosen before the first attempt can help correlate a\n   placement, but it is not an idempotency key. A missing match does not prove non-execution.\n   Hashpower does not guarantee when a placed bid appears in `ListBids`.\n\n   The API does not yet provide conclusive automated placement recovery. Stop automatic\n   replacement while the placement's outcome remains unknown. Do not create another placement\n   with a new UUID or fall back to v1 solely because the outcome remains unknown.\n - `DURATION_TOO_SHORT` (400): The bid's budget would run out sooner than\n   `SpotSettings.min_limited_duration` at its speed limit and price.\n - `BID_NOT_READY` (400): The bid was placed moments ago and cannot be changed yet. Retry\n   shortly with a new `request_id`."
+      },
+      "braiins.hashpower.trading.v2.Transaction": {
+        "type": "object",
+        "properties": {
+          "transaction_id": {
+            "type": "string",
+            "title": "transaction_id",
+            "description": "Movement identifier, for example `T1234`. Movements are listed in the\n order they were booked."
+          },
+          "type": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/braiins.hashpower.trading.v2.TransactionType"
+              }
+            ],
+            "title": "type",
+            "description": "What the movement was."
+          },
+          "time": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/google.protobuf.Timestamp"
+              }
+            ],
+            "title": "time",
+            "description": "When the movement took effect. It can be earlier than when it was booked."
+          },
+          "amount_sat": {
+            "type": "string",
+            "title": "amount_sat",
+            "format": "int64",
+            "description": "Amount moved; always positive."
+          },
+          "available_change_sat": {
+            "type": "string",
+            "title": "available_change_sat",
+            "format": "int64",
+            "description": "Change of the available funds."
+          },
+          "blocked_change_sat": {
+            "type": "string",
+            "title": "blocked_change_sat",
+            "format": "int64",
+            "description": "Change of the blocked funds."
+          },
+          "bid_id": {
+            "type": "string",
+            "title": "bid_id",
+            "description": "Bid the movement belongs to, for example `B1234`. Empty for other\n movements."
+          },
+          "contract_id": {
+            "type": "string",
+            "title": "contract_id",
+            "description": "Contract the movement belongs to, for example `C1234`. Empty for other\n movements."
+          }
+        },
+        "title": "Transaction",
+        "additionalProperties": false,
+        "description": "A movement of the account's balance. Amounts are in satoshis.\n\n `available_change_sat` and `blocked_change_sat` are signed changes of\n `Balance.available_sat` and `Balance.blocked_sat`; their sum is the change\n of `Balance.total_sat`. For example, blocking funds for a bid lowers the\n available funds and raises the blocked funds by the same amount, so the\n total does not change."
+      },
+      "braiins.hashpower.trading.v2.TransactionType": {
+        "type": "string",
+        "title": "TransactionType",
+        "enum": [
+          "TRANSACTION_TYPE_UNSPECIFIED",
+          "TRANSACTION_TYPE_DEPOSIT",
+          "TRANSACTION_TYPE_WITHDRAWAL",
+          "TRANSACTION_TYPE_BID_FUNDS_BLOCKED",
+          "TRANSACTION_TYPE_BID_FUNDS_RELEASED",
+          "TRANSACTION_TYPE_BID_SETTLEMENT",
+          "TRANSACTION_TYPE_CONTRACT_FUNDS_BLOCKED",
+          "TRANSACTION_TYPE_CONTRACT_FUNDS_RELEASED",
+          "TRANSACTION_TYPE_CONTRACT_SETTLEMENT",
+          "TRANSACTION_TYPE_CONTRACT_PREMIUM",
+          "TRANSACTION_TYPE_CONTRACT_CANCELLATION_FEE",
+          "TRANSACTION_TYPE_OTHER"
+        ],
+        "description": "What a balance movement was. New types may be added; treat unknown values\n like `TRANSACTION_TYPE_OTHER` and rely on the movement's balance changes.\n\n - `TRANSACTION_TYPE_DEPOSIT`: A deposit was credited to the available funds.\n - `TRANSACTION_TYPE_WITHDRAWAL`: Funds were withdrawn from the available funds.\n - `TRANSACTION_TYPE_BID_FUNDS_BLOCKED`: A bid's budget, or a budget increase, was blocked\n   from the available funds.\n - `TRANSACTION_TYPE_BID_FUNDS_RELEASED`: Blocked funds returned to the available funds: the\n   unspent budget of a finished bid, or a rejected placement or budget increase.\n - `TRANSACTION_TYPE_BID_SETTLEMENT`: Blocked funds paid for hashrate a bid bought, fees\n   included.\n - `TRANSACTION_TYPE_CONTRACT_FUNDS_BLOCKED`: Funds were blocked for a contract.\n - `TRANSACTION_TYPE_CONTRACT_FUNDS_RELEASED`: Funds blocked for a contract returned to the\n   available funds.\n - `TRANSACTION_TYPE_CONTRACT_SETTLEMENT`: Blocked funds paid for hashrate a contract\n   delivered, at the daily PPS rate.\n - `TRANSACTION_TYPE_CONTRACT_PREMIUM`: Blocked funds paid as the contract's premium over the\n   daily PPS rate.\n - `TRANSACTION_TYPE_CONTRACT_CANCELLATION_FEE`: Blocked funds paid as the fee for\n   cancelling a contract.\n - `TRANSACTION_TYPE_OTHER`: Any other movement, such as a correction."
+      },
+      "braiins.hashpower.trading.v2.UpdateBidRequest": {
+        "type": "object",
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "title": "account_id",
+            "description": "Account identifier from `ListAccounts`."
+          },
+          "bid_id": {
+            "type": "string",
+            "title": "bid_id",
+            "description": "Bid identifier."
+          },
+          "request_id": {
+            "type": "string",
+            "title": "request_id",
+            "description": "Idempotency key: a UUID you generate for each change, for example a random\n UUID v4. Reuse it only to retry the same request after a timeout, a 429 or\n 5xx response, or `OUTCOME_PENDING`; reusing it with a different body fails\n with `REQUEST_ID_REUSED`."
+          },
+          "price_sat": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "price_sat",
+            "format": "int64",
+            "description": "New maximum price, in satoshis per EH/day."
+          },
+          "amount_sat": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "amount_sat",
+            "format": "int64",
+            "description": "New total budget, in satoshis. A lower value than the current budget fails\n with `AMOUNT_DECREASE_NOT_ALLOWED`, and the current value changes nothing."
+          },
+          "speed_limit_ph": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "speed_limit_ph",
+            "format": "double",
+            "description": "New speed limit, in PH/s. Use 0 to remove the limit."
+          },
+          "memo": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "memo",
+            "description": "New memo. It cannot be empty; a memo cannot be removed."
+          }
+        },
+        "title": "UpdateBidRequest",
+        "required": [
+          "account_id",
+          "bid_id",
+          "request_id"
+        ],
+        "additionalProperties": false,
+        "description": "Request for `UpdateBid`. Omitted fields stay unchanged."
+      },
+      "google.protobuf.Any": {
+        "type": "object",
+        "description": "One error detail. `@type` names its type and decides which other fields\nare set: `type.googleapis.com/google.rpc.ErrorInfo` sets `reason`,\n`domain` and `metadata`; `type.googleapis.com/google.rpc.BadRequest`\nsets `field_violations`.",
+        "required": [
+          "@type"
+        ],
+        "properties": {
+          "@type": {
+            "type": "string",
+            "description": "Type of the detail."
+          },
+          "reason": {
+            "type": "string",
+            "description": "`ErrorInfo`: the error reason, a value of `TradingErrorReason`,\n`DeliveryErrorReason` or `PoolErrorReason`."
+          },
+          "domain": {
+            "type": "string",
+            "description": "`ErrorInfo`: always `hashpower.braiins.com`."
+          },
+          "metadata": {
+            "type": "object",
+            "description": "`ErrorInfo`: additional context, if any.",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "field_violations": {
+            "type": "array",
+            "description": "`BadRequest`: the invalid request fields.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string",
+                  "description": "Path of the invalid field."
+                },
+                "description": {
+                  "type": "string",
+                  "description": "Why the field is invalid."
+                }
+              }
+            }
+          }
+        },
+        "additionalProperties": true
+      },
+      "google.protobuf.Duration": {
+        "type": "string",
+        "format": "duration",
+        "description": "A signed duration in seconds, with up to nine fractional digits and an `s` suffix (for example, `3s` or `-0.001s`)."
+      },
+      "google.protobuf.Timestamp": {
+        "type": "string",
+        "examples": [
+          "2023-01-15T01:30:15.01Z",
+          "2024-12-25T12:00:00Z"
+        ],
+        "format": "date-time",
+        "description": "A point in time in RFC 3339 format, with up to nanosecond precision. Output uses UTC (`Z`); input may use an offset from UTC."
+      },
+      "google.rpc.Status": {
+        "type": "object",
+        "description": "An error, in the `google.rpc.Status` format.",
+        "properties": {
+          "code": {
+            "type": "integer",
+            "format": "int32",
+            "description": "gRPC status code, for example 3 (`INVALID_ARGUMENT`) or 9\n(`FAILED_PRECONDITION`). The HTTP status follows from it."
+          },
+          "message": {
+            "type": "string",
+            "description": "Developer-facing explanation. The text may change; do not parse it."
+          },
+          "details": {
+            "type": "array",
+            "description": "Error details, usually one `google.rpc.ErrorInfo`.",
+            "items": {
+              "$ref": "#/components/schemas/google.protobuf.Any"
+            }
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "braiins_api_key": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Account owners create API keys on the account page in Braiins ID.\nA key acts only on its own account. Reading requires the Viewer or\nAdmin role; placing, updating and cancelling bids requires Admin."
+      },
+      "braiins_id": {
+        "type": "oauth2",
+        "description": "OAuth 2.0 authorization code flow with Braiins ID.",
+        "flows": {
+          "authorizationCode": {
+            "authorizationUrl": "https://identity.braiins.com/oauth2/auth",
+            "tokenUrl": "https://identity.braiins.com/oauth2/token",
+            "scopes": {
+              "hashpower:read": "Read accounts, balances, transactions, spot fees, bids, bid hashrate and best shares, and check pools.",
+              "hashpower:write": "Place, update and cancel bids."
+            }
+          }
+        }
+      }
+    }
+  },
+  "paths": {
+    "/v2/accounts": {
+      "get": {
+        "tags": [
+          "AccountService"
+        ],
+        "summary": "Lists the accounts this token may act on.",
+        "description": "The list contains granted OAuth accounts the user can still view, or the\n API key's own account when it can view it, ordered by display name. When\n names cannot be loaded, the call fails with 503; retry later.\n\n Rate limit: burst of 60, then 120 per minute per client IP, shared by the\n `AccountService` methods and the `BidService` reads.\n Requires the OAuth `hashpower:read` scope or an API key with read access.",
+        "operationId": "AccountService_ListAccounts",
+        "parameters": [
+          {
+            "name": "page_size",
+            "in": "query",
+            "description": "Maximum number of accounts to return. Defaults to 50; values above 100 are\n treated as 100.",
+            "schema": {
+              "type": "integer",
+              "title": "page_size",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "page_token",
+            "in": "query",
+            "description": "`next_page_token` from a previous response, to fetch the next page.",
+            "schema": {
+              "type": "string",
+              "title": "page_token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/braiins.hashpower.trading.v2.ListAccountsResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/google.rpc.Status"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "braiins_id": [
+              "hashpower:read"
+            ]
+          },
+          {
+            "braiins_api_key": []
+          }
+        ],
+        "x-rate-limit": {
+          "budget": "trading_read",
+          "burst": 60,
+          "per_minute": 120
+        }
+      }
+    },
+    "/v2/accounts/{account_id}/balance": {
+      "get": {
+        "tags": [
+          "AccountService"
+        ],
+        "summary": "Returns the account's current balance.",
+        "description": "Rate limit: burst of 60, then 120 per minute per client IP, shared by the\n `AccountService` methods and the `BidService` reads.\n Requires the OAuth `hashpower:read` scope or an API key with read access.",
+        "operationId": "AccountService_GetBalance",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "description": "Account identifier from `ListAccounts`.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "account_id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/braiins.hashpower.trading.v2.Balance"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/google.rpc.Status"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "braiins_id": [
+              "hashpower:read"
+            ]
+          },
+          {
+            "braiins_api_key": []
+          }
+        ],
+        "x-rate-limit": {
+          "budget": "trading_read",
+          "burst": 60,
+          "per_minute": 120
+        }
+      }
+    },
+    "/v2/accounts/{account_id}/on-chain-transactions": {
+      "get": {
+        "tags": [
+          "AccountService"
+        ],
+        "summary": "Lists the account's deposits and withdrawals on the Bitcoin blockchain,\n newest first.",
+        "description": "Deposits are listed from the moment they are detected, with their\n processing state. A deposit changes the balance only once it is credited;\n the credit is then also listed by `ListTransactions`.\n\n Rate limit: burst of 60, then 120 per minute per client IP, shared by the\n `AccountService` methods and the `BidService` reads.\n Requires the OAuth `hashpower:read` scope or an API key with read access.",
+        "operationId": "AccountService_ListOnChainTransactions",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "description": "Account identifier from `ListAccounts`.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "account_id"
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "description": "Maximum number of transactions to return. Defaults to 50; values above\n 100 are treated as 100.",
+            "schema": {
+              "type": "integer",
+              "title": "page_size",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "page_token",
+            "in": "query",
+            "description": "`next_page_token` from a previous response, to fetch the next page.",
+            "schema": {
+              "type": "string",
+              "title": "page_token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/braiins.hashpower.trading.v2.ListOnChainTransactionsResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/google.rpc.Status"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "braiins_id": [
+              "hashpower:read"
+            ]
+          },
+          {
+            "braiins_api_key": []
+          }
+        ],
+        "x-rate-limit": {
+          "budget": "trading_read",
+          "burst": 60,
+          "per_minute": 120
+        }
+      }
+    },
+    "/v2/accounts/{account_id}/transactions": {
+      "get": {
+        "tags": [
+          "AccountService"
+        ],
+        "summary": "Lists the movements of the account's balance, newest first.",
+        "description": "Every change of the balance is listed: credited deposits, withdrawals,\n funds blocked for and released from bids, bid settlements, and contract\n movements. Each movement states how it changed the available and blocked\n funds reported by `GetBalance`. Use `bid_id` to list one bid's movements.\n Deposits that are not credited yet are in `ListOnChainTransactions`.\n\n Rate limit: burst of 60, then 120 per minute per client IP, shared by the\n `AccountService` methods and the `BidService` reads.\n Requires the OAuth `hashpower:read` scope or an API key with read access.",
+        "operationId": "AccountService_ListTransactions",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "description": "Account identifier from `ListAccounts`.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "account_id"
+            }
+          },
+          {
+            "name": "bid_id",
+            "in": "query",
+            "description": "Return only the movements of this bid, for example `B1234`.",
+            "schema": {
+              "type": "string",
+              "title": "bid_id"
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "description": "Maximum number of movements to return. Defaults to 50; values above 500\n are treated as 500.",
+            "schema": {
+              "type": "integer",
+              "title": "page_size",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "page_token",
+            "in": "query",
+            "description": "`next_page_token` from a previous response, to fetch the next page.",
+            "schema": {
+              "type": "string",
+              "title": "page_token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/braiins.hashpower.trading.v2.ListTransactionsResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/google.rpc.Status"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "braiins_id": [
+              "hashpower:read"
+            ]
+          },
+          {
+            "braiins_api_key": []
+          }
+        ],
+        "x-rate-limit": {
+          "budget": "trading_read",
+          "burst": 60,
+          "per_minute": 120
+        }
+      }
+    },
+    "/v2/pools:validate": {
+      "post": {
+        "tags": [
+          "PoolService"
+        ],
+        "summary": "Checks a pool and worker before you place a bid on them.",
+        "description": "`PlaceBid` accepts every pool URL and worker this method accepts, in the\n same canonical form. For a `stratum+tcp` pool, Hashpower opens a Stratum\n V1 connection and tries to authorize the worker, which completes within 15\n seconds; set a client timeout of at least 20 seconds. Pools with other\n schemes are not contacted: the result is `POOL_CHECK_RESULT_OK` with the\n `POOL_WARNING_CODE_NOT_CHECKED` warning. Whatever the scheme, a host whose\n DNS answers are all non-public addresses fails with `INVALID_POOL_URL`;\n `PlaceBid` does not resolve the host. Use `normalized_pool_url` from the\n response when placing a bid. The check names no account, but your credential\n must still allow you to view at least one Hashpower account. An API key\n checks only the account it belongs to.\n\n Error reasons: `INVALID_POOL_URL` (400), and those of the 401 and 403\n responses.\n\n OAuth requires `hashpower:read`; API keys require read access.\n\n Rate limit: burst of 3, then 6 per minute per client IP.",
+        "operationId": "PoolService_ValidatePool",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/braiins.hashpower.pools.v2.ValidatePoolRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/braiins.hashpower.pools.v2.ValidatePoolResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/google.rpc.Status"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "braiins_id": [
+              "hashpower:read"
+            ]
+          },
+          {
+            "braiins_api_key": []
+          }
+        ],
+        "x-rate-limit": {
+          "budget": "pool_check",
+          "burst": 3,
+          "per_minute": 6
+        }
+      }
+    },
+    "/v2/spot/accounts/{account_id}/bids": {
+      "get": {
+        "tags": [
+          "BidService"
+        ],
+        "summary": "Lists the account's bids, newest first: by creation time, then by bid ID.\n Each page continues after the last bid of the previous one, so bids placed\n or finished while you page neither repeat nor shift the others.",
+        "description": "Rate limit: burst of 60, then 120 per minute per client IP, shared by the\n `AccountService` methods and the `BidService` reads.\n Requires the OAuth `hashpower:read` scope or an API key with read access.",
+        "operationId": "BidService_ListBids",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "description": "Account identifier from `ListAccounts`.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "account_id"
+            }
+          },
+          {
+            "name": "current_only",
+            "in": "query",
+            "description": "Return only current bids: created, active, paused, frozen or canceling.",
+            "schema": {
+              "type": "boolean",
+              "title": "current_only"
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "description": "Maximum number of bids to return. Defaults to 50; values above 500 are\n treated as 500.",
+            "schema": {
+              "type": "integer",
+              "title": "page_size",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "page_token",
+            "in": "query",
+            "description": "`next_page_token` from a previous response, to fetch the next page.",
+            "schema": {
+              "type": "string",
+              "title": "page_token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/braiins.hashpower.trading.v2.ListBidsResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/google.rpc.Status"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "braiins_id": [
+              "hashpower:read"
+            ]
+          },
+          {
+            "braiins_api_key": []
+          }
+        ],
+        "x-rate-limit": {
+          "budget": "trading_read",
+          "burst": 60,
+          "per_minute": 120
+        }
+      },
+      "post": {
+        "tags": [
+          "BidService"
+        ],
+        "summary": "Places a new bid and returns it.",
+        "description": "The bid delivers to the destination in canonical form, the form\n `PoolService.ValidatePool` returns as `normalized_pool_url`. Every\n destination `ValidatePool` accepts is accepted here; `ValidatePool` also\n rejects a host whose addresses are all non-public, which this method does\n not resolve. The bid's funds are blocked from the account's available\n balance. Fails with `INSUFFICIENT_FUNDS` when the available balance is too\n low. A bid that cannot be read yet is returned as `BID_STATE_CREATING`.\n\n Error reasons: `PRICE_OUT_OF_RANGE`, `PRICE_NOT_ON_TICK`,\n `AMOUNT_OUT_OF_RANGE`, `SPEED_LIMIT_OUT_OF_RANGE`, `DURATION_TOO_SHORT`,\n `INVALID_DESTINATION`, `INSUFFICIENT_FUNDS`, `TOO_MANY_CURRENT_BIDS` and\n `MARKET_HALTED` (400), `REQUEST_ID_REUSED` (409), `OUTCOME_PENDING` (503),\n and those of the 401 and 403 responses.\n\n Rate limit: burst of 10, then 30 per minute per client IP, shared by\n `PlaceBid`, `UpdateBid` and `CancelBid`.\n Requires the OAuth `hashpower:write` scope or an API key allowed to change bids.",
+        "operationId": "BidService_PlaceBid",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "description": "Account identifier from `ListAccounts`.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "account_id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "request_id": {
+                    "type": "string",
+                    "title": "request_id",
+                    "description": "Idempotency key: a UUID you generate for each change, for example a random\n UUID v4. Reuse it only to retry the same request after a timeout, a 429 or\n 5xx response, or `OUTCOME_PENDING`; reusing it with a different body fails\n with `REQUEST_ID_REUSED`."
+                  },
+                  "destination": {
+                    "allOf": [
+                      {
+                        "$ref": "#/components/schemas/braiins.hashpower.trading.v2.Destination"
+                      }
+                    ],
+                    "title": "destination",
+                    "description": "Pool and worker receiving the hashrate."
+                  },
+                  "price_sat": {
+                    "type": "string",
+                    "title": "price_sat",
+                    "format": "int64",
+                    "description": "Maximum price to pay, in satoshis per EH/day."
+                  },
+                  "amount_sat": {
+                    "type": "string",
+                    "title": "amount_sat",
+                    "format": "int64",
+                    "description": "Total budget, in satoshis."
+                  },
+                  "speed_limit_ph": {
+                    "type": [
+                      "number",
+                      "null"
+                    ],
+                    "title": "speed_limit_ph",
+                    "format": "double",
+                    "description": "Maximum hashrate to buy, in PH/s. Omit for no limit."
+                  },
+                  "memo": {
+                    "type": "string",
+                    "title": "memo",
+                    "description": "Free-text note."
+                  }
+                },
+                "title": "PlaceBidRequest",
+                "required": [
+                  "request_id",
+                  "destination",
+                  "price_sat",
+                  "amount_sat"
+                ],
+                "additionalProperties": false,
+                "description": "Request for `PlaceBid`."
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/braiins.hashpower.trading.v2.Bid"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/google.rpc.Status"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "braiins_id": [
+              "hashpower:write"
+            ]
+          },
+          {
+            "braiins_api_key": []
+          }
+        ],
+        "x-rate-limit": {
+          "budget": "bid_write",
+          "burst": 10,
+          "per_minute": 30
+        }
+      }
+    },
+    "/v2/spot/accounts/{account_id}/bids/{bid_id}": {
+      "get": {
+        "tags": [
+          "BidService"
+        ],
+        "summary": "Returns one bid.",
+        "description": "Rate limit: burst of 60, then 120 per minute per client IP, shared by the\n `AccountService` methods and the `BidService` reads.\n Requires the OAuth `hashpower:read` scope or an API key with read access.",
+        "operationId": "BidService_GetBid",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "description": "Account identifier from `ListAccounts`.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "account_id"
+            }
+          },
+          {
+            "name": "bid_id",
+            "in": "path",
+            "description": "Bid identifier.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "bid_id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/braiins.hashpower.trading.v2.Bid"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/google.rpc.Status"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "braiins_id": [
+              "hashpower:read"
+            ]
+          },
+          {
+            "braiins_api_key": []
+          }
+        ],
+        "x-rate-limit": {
+          "budget": "trading_read",
+          "burst": 60,
+          "per_minute": 120
+        }
+      },
+      "patch": {
+        "tags": [
+          "BidService"
+        ],
+        "summary": "Changes a bid's price, budget, speed limit or memo and returns the bid.",
+        "description": "Only the fields present in the request change. The returned bid has the\n new terms; it is `BID_STATE_UPDATING` while the bid does not show them yet.\n A retry after a later change to the bid, or after the bid finished, returns\n the bid as it is, because it will not show this change again.\n\n A price decrease and a speed-limit decrease are each allowed once per\n `price_decrease_interval` and `speed_limit_decrease_interval`.\n\n Right after `PlaceBid`, while `GetBid` still answers `BID_NOT_FOUND` for\n the new bid, this method fails with `BID_NOT_FOUND` too. Retry shortly\n with a new `request_id`.\n\n Price, budget and speed-limit increases are allowed. Use a speed limit\n of 0 to remove it. Budget decreases are not allowed.\n\n Error reasons: `PRICE_OUT_OF_RANGE`, `PRICE_NOT_ON_TICK`,\n `AMOUNT_OUT_OF_RANGE`, `SPEED_LIMIT_OUT_OF_RANGE`,\n `AMOUNT_DECREASE_NOT_ALLOWED`, `DURATION_TOO_SHORT`, `BID_NOT_MODIFIABLE`,\n `DECREASE_TOO_SOON`, `MARKET_HALTED` and `BID_NOT_READY` (400),\n `BID_NOT_FOUND` (404),\n `REQUEST_ID_REUSED` (409), `OUTCOME_PENDING` (503), and those of the 401\n and 403 responses.\n\n Rate limit: burst of 10, then 30 per minute per client IP, shared by\n `PlaceBid`, `UpdateBid` and `CancelBid`.\n Requires the OAuth `hashpower:write` scope or an API key allowed to change bids.",
+        "operationId": "BidService_UpdateBid",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "description": "Account identifier from `ListAccounts`.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "account_id"
+            }
+          },
+          {
+            "name": "bid_id",
+            "in": "path",
+            "description": "Bid identifier.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "bid_id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "request_id": {
+                    "type": "string",
+                    "title": "request_id",
+                    "description": "Idempotency key: a UUID you generate for each change, for example a random\n UUID v4. Reuse it only to retry the same request after a timeout, a 429 or\n 5xx response, or `OUTCOME_PENDING`; reusing it with a different body fails\n with `REQUEST_ID_REUSED`."
+                  },
+                  "price_sat": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "title": "price_sat",
+                    "format": "int64",
+                    "description": "New maximum price, in satoshis per EH/day."
+                  },
+                  "amount_sat": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "title": "amount_sat",
+                    "format": "int64",
+                    "description": "New total budget, in satoshis. A lower value than the current budget fails\n with `AMOUNT_DECREASE_NOT_ALLOWED`, and the current value changes nothing."
+                  },
+                  "speed_limit_ph": {
+                    "type": [
+                      "number",
+                      "null"
+                    ],
+                    "title": "speed_limit_ph",
+                    "format": "double",
+                    "description": "New speed limit, in PH/s. Use 0 to remove the limit."
+                  },
+                  "memo": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "title": "memo",
+                    "description": "New memo. It cannot be empty; a memo cannot be removed."
+                  }
+                },
+                "title": "UpdateBidRequest",
+                "required": [
+                  "request_id"
+                ],
+                "additionalProperties": false,
+                "description": "Request for `UpdateBid`. Omitted fields stay unchanged."
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/braiins.hashpower.trading.v2.Bid"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/google.rpc.Status"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "braiins_id": [
+              "hashpower:write"
+            ]
+          },
+          {
+            "braiins_api_key": []
+          }
+        ],
+        "x-rate-limit": {
+          "budget": "bid_write",
+          "burst": 10,
+          "per_minute": 30
+        }
+      }
+    },
+    "/v2/spot/accounts/{account_id}/bids/{bid_id}/best-share": {
+      "get": {
+        "tags": [
+          "DeliveryService"
+        ],
+        "summary": "Returns the best share of a bid: the recorded best share with the highest\n difficulty attributed by destination and bid lifetime, including the\n one-minute grace period after the bid ends.",
+        "description": "A bid placed moments ago can be `BID_NOT_FOUND` for a short while.\n\n Requires the OAuth `hashpower:read` scope or an API key with read access.\n\n Rate limit: burst of 60, then 120 per minute per client IP, shared by all\n `DeliveryService` methods.",
+        "operationId": "DeliveryService_GetBidBestShare",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "description": "Account identifier from `ListAccounts`.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "account_id"
+            }
+          },
+          {
+            "name": "bid_id",
+            "in": "path",
+            "description": "Bid identifier, for example `B1234`.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "bid_id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/braiins.hashpower.delivery.v2.BidBestShare"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/google.rpc.Status"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "braiins_id": [
+              "hashpower:read"
+            ]
+          },
+          {
+            "braiins_api_key": []
+          }
+        ],
+        "x-rate-limit": {
+          "budget": "delivery_read",
+          "burst": 60,
+          "per_minute": 120
+        }
+      }
+    },
+    "/v2/spot/accounts/{account_id}/bids/{bid_id}/hashrate": {
+      "get": {
+        "tags": [
+          "DeliveryService"
+        ],
+        "summary": "Returns a bid's delivered hashrate per interval, oldest first.",
+        "description": "Samples cover the intervals from the bid's first to its last delivery;\n intervals in between without delivery read 0. Intervals after the last\n delivery are not returned, so for a bid that stopped buying, for example a\n paused one, the newest sample is not its current hashrate: compare the\n sample's `start_time` with now. A bid without delivery yet has no samples,\n and a bid placed moments ago can be `BID_NOT_FOUND` for a short while.\n\n Requires the OAuth `hashpower:read` scope or an API key with read access.\n\n Rate limit: burst of 60, then 120 per minute per client IP, shared by all\n `DeliveryService` methods.",
+        "operationId": "DeliveryService_GetBidHashrate",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "description": "Account identifier from `ListAccounts`.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "account_id"
+            }
+          },
+          {
+            "name": "bid_id",
+            "in": "path",
+            "description": "Bid identifier, for example `B1234`.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "bid_id"
+            }
+          },
+          {
+            "name": "interval",
+            "in": "query",
+            "description": "Length of each sample.",
+            "required": true,
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/braiins.hashpower.delivery.v2.HashrateInterval"
+                }
+              ],
+              "title": "interval"
+            }
+          },
+          {
+            "name": "start_time",
+            "in": "query",
+            "description": "Return samples starting with the first interval that starts at or after\n this time. Omit to get the most recent samples, which end with the bid's\n last interval with delivery.",
+            "schema": {
+              "type": "string",
+              "examples": [
+                "2023-01-15T01:30:15.01Z",
+                "2024-12-25T12:00:00Z"
+              ],
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Number of samples to return. Defaults to 288; values above 1000 are\n treated as 1000.",
+            "schema": {
+              "type": "integer",
+              "title": "limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/braiins.hashpower.delivery.v2.BidHashrate"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/google.rpc.Status"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "braiins_id": [
+              "hashpower:read"
+            ]
+          },
+          {
+            "braiins_api_key": []
+          }
+        ],
+        "x-rate-limit": {
+          "budget": "delivery_read",
+          "burst": 60,
+          "per_minute": 120
+        }
+      }
+    },
+    "/v2/spot/accounts/{account_id}/bids/{bid_id}:cancel": {
+      "post": {
+        "tags": [
+          "BidService"
+        ],
+        "summary": "Cancels a bid and returns it.",
+        "description": "Cancellation is asynchronous: the returned bid is usually in\n `BID_STATE_CANCELING`. Its unspent budget is released when it reaches\n `BID_STATE_CANCELED`. Fails with `CANCEL_GRACE_PERIOD` when the bid is\n younger than the market's cancel grace period.\n\n Right after `PlaceBid`, while `GetBid` still answers `BID_NOT_FOUND` for\n the new bid, this method fails with `BID_NOT_FOUND` too. Retry shortly\n with a new `request_id`.\n\n Error reasons: `BID_NOT_MODIFIABLE` and `CANCEL_GRACE_PERIOD` (400),\n `BID_NOT_FOUND` (404), `REQUEST_ID_REUSED` (409), `OUTCOME_PENDING` (503),\n and those of the 401 and 403 responses.\n\n Rate limit: burst of 10, then 30 per minute per client IP, shared by\n `PlaceBid`, `UpdateBid` and `CancelBid`.\n Requires the OAuth `hashpower:write` scope or an API key allowed to change bids.",
+        "operationId": "BidService_CancelBid",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "description": "Account identifier from `ListAccounts`.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "account_id"
+            }
+          },
+          {
+            "name": "bid_id",
+            "in": "path",
+            "description": "Bid identifier.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "bid_id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "request_id": {
+                    "type": "string",
+                    "title": "request_id",
+                    "description": "Idempotency key: a UUID you generate for each change, for example a random\n UUID v4. Reuse it only to retry the same request after a timeout, a 429 or\n 5xx response, or `OUTCOME_PENDING`; reusing it with a different body fails\n with `REQUEST_ID_REUSED`."
+                  }
+                },
+                "title": "CancelBidRequest",
+                "required": [
+                  "request_id"
+                ],
+                "additionalProperties": false,
+                "description": "Request for `CancelBid`."
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/braiins.hashpower.trading.v2.Bid"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/google.rpc.Status"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "braiins_id": [
+              "hashpower:write"
+            ]
+          },
+          {
+            "braiins_api_key": []
+          }
+        ],
+        "x-rate-limit": {
+          "budget": "bid_write",
+          "burst": 10,
+          "per_minute": 30
+        }
+      }
+    },
+    "/v2/spot/accounts/{account_id}/bids:batchGetBestShares": {
+      "get": {
+        "tags": [
+          "DeliveryService"
+        ],
+        "summary": "Returns the best shares of up to 100 bids of the account in one call.",
+        "description": "Bids that are not found are listed in `missing_bid_ids` instead of\n failing the call.\n\n Requires the OAuth `hashpower:read` scope or an API key with read access.\n\n Rate limit: burst of 60, then 120 per minute per client IP, shared by all\n `DeliveryService` methods.",
+        "operationId": "DeliveryService_BatchGetBidBestShares",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "description": "Account identifier from `ListAccounts`.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "account_id"
+            }
+          },
+          {
+            "name": "bid_ids",
+            "in": "query",
+            "description": "Bid identifiers, for example `B1234`: 1 to 100 distinct bids.",
+            "required": true,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "title": "bid_ids"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/braiins.hashpower.delivery.v2.BatchGetBidBestSharesResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/google.rpc.Status"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "braiins_id": [
+              "hashpower:read"
+            ]
+          },
+          {
+            "braiins_api_key": []
+          }
+        ],
+        "x-rate-limit": {
+          "budget": "delivery_read",
+          "burst": 60,
+          "per_minute": 120
+        }
+      }
+    },
+    "/v2/spot/accounts/{account_id}/fees": {
+      "get": {
+        "tags": [
+          "BidService"
+        ],
+        "summary": "Returns the account's spot trading fees.",
+        "description": "Rate limit: burst of 60, then 120 per minute per client IP, shared by the\n `AccountService` methods and the `BidService` reads.\n Requires the OAuth `hashpower:read` scope or an API key with read access.",
+        "operationId": "BidService_GetSpotFees",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "description": "Account identifier from `ListAccounts`.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "account_id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/braiins.hashpower.trading.v2.SpotFees"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/google.rpc.Status"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "braiins_id": [
+              "hashpower:read"
+            ]
+          },
+          {
+            "braiins_api_key": []
+          }
+        ],
+        "x-rate-limit": {
+          "budget": "trading_read",
+          "burst": 60,
+          "per_minute": 120
+        }
+      }
+    },
+    "/v2/spot/ohlc": {
+      "get": {
+        "tags": [
+          "MarketService"
+        ],
+        "summary": "Lists the most recent OHLC price summaries (open, high, low, close), one\n per interval, oldest first.",
+        "description": "Summaries are cached for up to 60 seconds, so a trade can take up to a\n minute to appear in them.\n\n Rate limit: burst of 30, then 60 per minute per client IP, shared by all\n `MarketService` methods.",
+        "operationId": "MarketService_ListOhlc",
+        "parameters": [
+          {
+            "name": "interval",
+            "in": "query",
+            "description": "Length of the interval each summary covers.",
+            "required": true,
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/braiins.hashpower.market.v2.OhlcInterval"
+                }
+              ],
+              "title": "interval"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of summaries. Defaults to 100; values above 1000 are\n treated as 1000. The summaries end at the interval of the most recent trade\n and start no earlier than the first trade in the last 2 × `limit` intervals\n before now, at most 30 days back, so a quiet market returns fewer.",
+            "schema": {
+              "type": "integer",
+              "title": "limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/braiins.hashpower.market.v2.ListOhlcResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/google.rpc.Status"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {}
+        ],
+        "x-rate-limit": {
+          "budget": "market",
+          "burst": 30,
+          "per_minute": 60
+        }
+      }
+    },
+    "/v2/spot/orderbook": {
+      "get": {
+        "tags": [
+          "MarketService"
+        ],
+        "summary": "Returns the current order book, aggregated by price level.",
+        "description": "Fails with 503 while no current order book is available, for example\n shortly after a Hashpower restart.\n\n Rate limit: burst of 30, then 60 per minute per client IP, shared by all\n `MarketService` methods.",
+        "operationId": "MarketService_GetOrderBook",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/braiins.hashpower.market.v2.OrderBook"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/google.rpc.Status"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {}
+        ],
+        "x-rate-limit": {
+          "budget": "market",
+          "burst": 30,
+          "per_minute": 60
+        }
+      }
+    },
+    "/v2/spot/settings": {
+      "get": {
+        "tags": [
+          "BidService"
+        ],
+        "summary": "Returns the spot market settings: the limits a new or updated bid must\n respect.",
+        "description": "Validate prices against `tick_size_sat` and the price range before placing\n or updating a bid. The settings are the same for every account; the\n account's fee rate is returned by `GetSpotFees`. No authentication is\n required.\n\n Rate limit: burst of 30, then 60 per minute per client IP.",
+        "operationId": "BidService_GetSpotSettings",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/braiins.hashpower.trading.v2.SpotSettings"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/google.rpc.Status"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {}
+        ],
+        "x-rate-limit": {
+          "budget": "spot_settings",
+          "burst": 30,
+          "per_minute": 60
+        }
+      }
+    },
+    "/v2/spot/stats": {
+      "get": {
+        "tags": [
+          "MarketService"
+        ],
+        "summary": "Returns current market statistics.",
+        "description": "Fails with 503 while no current order book is available, for example\n shortly after a Hashpower restart.\n\n Rate limit: burst of 30, then 60 per minute per client IP, shared by all\n `MarketService` methods.",
+        "operationId": "MarketService_GetMarketStats",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/braiins.hashpower.market.v2.MarketStats"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/google.rpc.Status"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {}
+        ],
+        "x-rate-limit": {
+          "budget": "market",
+          "burst": 30,
+          "per_minute": 60
+        }
+      }
+    },
+    "/v2/spot/trades": {
+      "get": {
+        "tags": [
+          "MarketService"
+        ],
+        "summary": "Lists the most recent trades, newest first.",
+        "description": "Rate limit: burst of 30, then 60 per minute per client IP, shared by all\n `MarketService` methods.",
+        "operationId": "MarketService_ListTrades",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Number of trades to return. Defaults to 100; values above 1000 are treated\n as 1000.",
+            "schema": {
+              "type": "integer",
+              "title": "limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/braiins.hashpower.market.v2.ListTradesResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/google.rpc.Status"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {}
+        ],
+        "x-rate-limit": {
+          "budget": "market",
+          "burst": 30,
+          "per_minute": 60
+        }
+      }
+    }
+  },
+  "security": []
+}

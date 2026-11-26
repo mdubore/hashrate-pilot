@@ -28,6 +28,8 @@ const SAT_PER_EH_PER_PH = 1000;
 
 interface FormState {
   // Secrets
+  braiins_api_version: 'v1' | 'v2';
+  braiins_api_key: string;
   braiins_owner_token: string;
   braiins_read_only_token: string;
   dashboard_password: string;
@@ -74,6 +76,8 @@ export function Setup() {
         setInfo(i);
         const base: AppConfig = i.current_config ?? i.defaults;
         setForm({
+          braiins_api_version: 'v2',
+          braiins_api_key: '',
           braiins_owner_token: '',
           braiins_read_only_token: '',
           dashboard_password: '',
@@ -167,10 +171,12 @@ export function Setup() {
       await api.submitSetup({
         config,
         secrets: {
-          braiins_owner_token: form.braiins_owner_token,
-          ...(form.braiins_read_only_token
-            ? { braiins_read_only_token: form.braiins_read_only_token }
-            : {}),
+          ...(form.braiins_api_version === 'v2'
+            ? { braiins_api_version: 'v2' as const, braiins_api_key: form.braiins_api_key.trim() }
+            : {
+                braiins_owner_token: form.braiins_owner_token.trim(),
+                ...(form.braiins_read_only_token ? { braiins_read_only_token: form.braiins_read_only_token.trim() } : {}),
+              }),
           dashboard_password: form.dashboard_password,
           ...(form.payout_source === 'bitcoind' && form.bitcoind_rpc_url
             ? {
@@ -316,7 +322,7 @@ function AccessStep({
   void i18n;
   const passwordsMatch = form.dashboard_password === form.dashboard_password_confirm;
   const valid =
-    form.braiins_owner_token.trim().length > 0 &&
+    (form.braiins_api_version === 'v2' ? form.braiins_api_key : form.braiins_owner_token).trim().length > 0 &&
     form.dashboard_password.length >= 8 &&
     passwordsMatch;
   return (
@@ -328,22 +334,38 @@ function AccessStep({
       className="space-y-4"
     >
       <Section title={t`Braiins API access`}>
-        <Field label={t`Owner token`} hint={t`From hashpower.braiins.com → API tokens. Required.`}>
-          <PasswordField
-            value={form.braiins_owner_token}
-            onChange={(v) => update('braiins_owner_token', v)}
-            autoFocus
-          />
+        <Field label={t`Hashpower API version`}>
+          <select value={form.braiins_api_version}
+            onChange={(e) => update('braiins_api_version', e.target.value === 'v1' ? 'v1' : 'v2')}
+            className="w-full rounded border border-slate-700 bg-slate-950 p-2">
+            <option value="v2">v2 · Braiins ID</option>
+            <option value="v1">v1 · Legacy</option>
+          </select>
         </Field>
-        <Field
-          label={t`Read-only token`}
-          hint={t`Optional. Useful if you'd like a second token only for read paths.`}
-        >
-          <PasswordField
-            value={form.braiins_read_only_token}
-            onChange={(v) => update('braiins_read_only_token', v)}
-          />
-        </Field>
+        {form.braiins_api_version === 'v2' ? (
+          <Field label={t`Braiins ID API key`} hint={t`Create a key under Accounts → API Keys in Braiins ID. Viewer can monitor; Admin can also trade.`}>
+            <PasswordField value={form.braiins_api_key} onChange={(v) => update('braiins_api_key', v)} />
+          </Field>
+        ) : (
+          <>
+            <Field label={t`Owner token`} hint={t`Use a previously issued v1 owner token.`}>
+              <PasswordField
+                value={form.braiins_owner_token}
+                onChange={(v) => update('braiins_owner_token', v)}
+                autoFocus
+              />
+            </Field>
+            <Field
+              label={t`Read-only token`}
+              hint={t`Optional. Useful if you'd like a second token only for read paths.`}
+            >
+              <PasswordField
+                value={form.braiins_read_only_token}
+                onChange={(v) => update('braiins_read_only_token', v)}
+              />
+            </Field>
+          </>
+        )}
       </Section>
       <Section title={t`Dashboard password`}>
         <p className="text-xs text-slate-400 -mt-1">
@@ -662,8 +684,11 @@ function ReviewStep({
   return (
     <div className="space-y-4">
       <Section title={t`Review`}>
-        <ReviewRow label={t`Owner token`} value={maskToken(form.braiins_owner_token)} />
-        {form.braiins_read_only_token && (
+        <ReviewRow label={t`Hashpower API version`} value={form.braiins_api_version} />
+        {form.braiins_api_version === 'v2'
+          ? <ReviewRow label={t`Braiins ID API key`} value="••••••••" />
+          : <ReviewRow label={t`Owner token`} value={maskToken(form.braiins_owner_token)} />}
+        {form.braiins_api_version === 'v1' && form.braiins_read_only_token && (
           <ReviewRow label={t`Read-only token`} value={maskToken(form.braiins_read_only_token)} />
         )}
         <ReviewRow label={t`Dashboard password`} value="••••••••" />

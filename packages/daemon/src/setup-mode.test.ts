@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ConfigRepo } from './state/repos/config.js';
 import { SecretsRepo } from './state/repos/secrets.js';
@@ -48,6 +48,30 @@ describe('createSetupModeServer', () => {
   afterEach(async () => {
     await server.stop();
     await closeDatabase(handle);
+  });
+
+  it('verifies a v2-only first run using just GET accounts and keeps the key out of setup-info', async () => {
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
+      expect(new URL(String(url)).pathname).toBe('/v2/accounts');
+      expect(options?.method).toBe('GET');
+      expect(new Headers(options?.headers).get('authorization')).toBe('Bearer synthetic-v2');
+      return Response.json({ accounts: [{ account_id: 'matched-account' }] });
+    });
+    try {
+      const res = await server.app.inject({
+        method: 'POST', url: '/api/setup',
+        payload: {
+          config: validSetupPayload().config,
+          secrets: { braiins_api_version: 'v2', braiins_api_key: 'synthetic-v2', dashboard_password: 'pw-12345678' },
+        },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(fetch).toHaveBeenCalledOnce();
+      expect(await secretsRepo.get()).toMatchObject({ braiins_api_version: 'v2', braiins_account_id: 'matched-account' });
+      expect((await server.app.inject({ url: '/api/setup-info' })).body).not.toContain('synthetic-v2');
+    } finally {
+      fetch.mockRestore();
+    }
   });
 
   it('GET /api/health returns NEEDS_SETUP mode without auth', async () => {

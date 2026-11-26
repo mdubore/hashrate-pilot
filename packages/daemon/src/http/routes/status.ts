@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 
+import { decide, marketBidPrice } from '../../controller/decide.js';
 import { cheapestAskForDepth } from '../../controller/orderbook.js';
 import type { ExecutionResult, GateOutcome, State } from '../../controller/types.js';
 import type { HttpServerDeps } from '../server.js';
@@ -501,7 +502,11 @@ function describeNextAction(state: State, runMode: State['run_mode']): NextActio
       : null;
   const effectiveCapEH = dynamicCapEH !== null ? Math.min(fixedCapEH, dynamicCapEH) : fixedCapEH;
   const desiredEH = cheapestAsk + state.config.overpay_sat_per_eh_day;
-  const targetEH = Math.min(desiredEH, effectiveCapEH);
+  const targetEH = marketBidPrice(state.market, Math.min(desiredEH, effectiveCapEH));
+  if (targetEH === null) {
+    return { descriptor: null, summary: 'Waiting for an open market and a valid bid price within the configured cap.',
+      detail: null, ...noEvent };
+  }
   const targetPH = Math.round(targetEH / EH_PER_PH);
   const cappedByCeiling = desiredEH > effectiveCapEH;
   const targetLabel = cappedByCeiling
@@ -533,6 +538,13 @@ function describeNextAction(state: State, runMode: State['run_mode']): NextActio
   }
 
   if (state.owned_bids.length === 0) {
+    // Use the executable v2 proposal for the wallet cap, duration limit, and cheap-mode speed.
+    const planned = state.market.api_version === 'v2'
+      ? decide(state).find(p => p.kind === 'CREATE_BID') : undefined;
+    if (state.market.api_version === 'v2' && !planned) {
+      return { descriptor: null, summary: 'Waiting to place a bid.',
+        detail: 'Check the available balance, budget, market limits, and outstanding bids.', ...noEvent };
+    }
     const verb = runMode === 'LIVE' ? 'place' : 'log (dry-run)';
     let budgetText: string;
     type CreateBidBudget = Extract<NextActionDescriptor, { kind: 'will_create_bid' }>['budget'];
@@ -541,8 +553,9 @@ function describeNextAction(state: State, runMode: State['run_mode']): NextActio
       const availableSat =
         state.balance?.accounts?.[0]?.available_balance_sat ?? null;
       if (availableSat !== null && availableSat > 0) {
-        budgetText = `${Math.min(availableSat, 100_000_000).toLocaleString('en-US')} sat budget (full wallet)`;
-        budgetDescriptor = { kind: 'full_wallet', available_sat: Math.min(availableSat, 100_000_000) };
+        const resolved = planned?.amount_sat ?? Math.min(availableSat, 100_000_000);
+        budgetText = `${resolved.toLocaleString('en-US')} sat budget (full wallet)`;
+        budgetDescriptor = { kind: 'full_wallet', available_sat: resolved };
       } else {
         budgetText = 'full wallet balance (awaiting balance)';
         budgetDescriptor = { kind: 'awaiting_balance' };
@@ -558,11 +571,11 @@ function describeNextAction(state: State, runMode: State['run_mode']): NextActio
         target_ph: targetPH,
         capped: cappedByCeiling,
         target_ph_label: targetPH,
-        target_hashrate_ph: ph,
+        target_hashrate_ph: planned?.speed_limit_ph ?? ph,
         budget: budgetDescriptor,
       },
       summary: `Will ${verb} a CREATE_BID at ${targetLabel} on the next tick.`,
-      detail: `${ph} PH/s target, ${budgetText}.`,
+      detail: `${planned?.speed_limit_ph ?? ph} PH/s target, ${budgetText}.`,
       ...noEvent,
     };
   }

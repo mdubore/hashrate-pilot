@@ -29,7 +29,7 @@
  * care about.
  */
 
-import type { Proposal, State } from './types.js';
+import type { MarketSnapshot, Proposal, State } from './types.js';
 
 /**
  * Braiins hard cap on `amount_sat` per bid (SPEC §13: 1 BTC per bid).
@@ -37,6 +37,58 @@ import type { Proposal, State } from './types.js';
  * (sentinel for "use full wallet balance"). See issue #40.
  */
 const BRAIINS_MAX_AMOUNT_SAT = 100_000_000;
+
+/** Round down so neither the desired spend nor the operator's ceiling is exceeded. */
+export function marketBidPrice(
+  market: MarketSnapshot,
+  target: number,
+): number | null {
+  if (market.api_version !== "v2") return target;
+  if (market.stats.status !== "SPOT_INSTRUMENT_STATUS_ACTIVE") return null;
+  const { min_bid_price_sat, max_bid_price_sat, tick_size_sat } =
+    market.settings;
+  const price =
+    Math.floor(Math.min(target, max_bid_price_sat) / tick_size_sat) *
+    tick_size_sat;
+  return Number.isSafeInteger(price) && price > 0 && price >= min_bid_price_sat
+    ? price
+    : null;
+}
+
+function createBudget(
+  market: MarketSnapshot,
+  requested: number,
+  available: number | undefined,
+  priceSat: number,
+  speedPh: number,
+): number | null {
+  let budget = requested;
+  const v2 = market.api_version === "v2";
+  if (budget === 0) {
+    if (available === undefined || available <= 0) return null;
+    const marketCap = v2
+      ? market.settings.max_limited_bid_amount_sat
+      : BRAIINS_MAX_AMOUNT_SAT;
+    budget = Math.min(available, marketCap, BRAIINS_MAX_AMOUNT_SAT);
+  }
+  if (!v2) return budget;
+  const settings = market.settings;
+  // A PH/s is 1/1000 EH/s. Hashpower's price is satoshis for 1 EH/s for a day.
+  const minimumDurationCost = Math.ceil(
+    priceSat *
+      (speedPh / 1000) *
+      (settings.min_limited_bid_duration_s / 86_400),
+  );
+  if (
+    available === undefined ||
+    budget > available ||
+    budget <
+      Math.max(settings.min_limited_bid_amount_sat, minimumDurationCost) ||
+    budget > settings.max_limited_bid_amount_sat
+  )
+    return null;
+  return budget;
+}
 
 function fmtPricePH(satPerEhDay: number): string {
   const ph = Math.round(satPerEhDay / 1000);
@@ -54,17 +106,14 @@ export function decide(state: State): readonly Proposal[] {
     ];
   }
 
-  // #276: bids Braiins is already unwinding. DELETE /spot/bid is
-  // accepted asynchronously - the order lingers in the bids list as
-  // BID_STATUS_PENDING_CANCEL (observed for ~3 minutes on 2026-06-06
-  // while the seller side couldn't deliver). Treat them as
-  // already-gone for mutation purposes: never re-cancel (duplicate
-  // markers + wasted mutations), never price/speed-edit a dying
-  // order. They still count for the CREATE gate below so a
-  // replacement bid is not posted until the old order has actually
-  // left the list - two live bids must never overlap.
-  const isPendingCancel = (b: { status: string }): boolean =>
-    b.status === 'BID_STATUS_PENDING_CANCEL';
+  // Pending bids still block CREATE. Let the marketplace finish a placement,
+  // update or cancellation before sending another change to the same bid.
+  // A future v2 state must be understood before trading on it.
+  const canChange = (b: { status: string }): boolean =>
+    b.status !== 'BID_STATUS_PENDING_CANCEL' &&
+    b.status !== 'BID_STATUS_CREATING' &&
+    b.status !== 'BID_STATUS_UPDATING' &&
+    b.status !== 'BID_STATUS_UNSPECIFIED';
 
   // Cancel all owned bids when Datum stratum has been down for 3+
   // consecutive ticks (#199). No point paying for hashrate that
@@ -76,7 +125,7 @@ export function decide(state: State): readonly Proposal[] {
   // auth-proxy blip must not cancel every bid). Spec §9.
   const STRATUM_DOWN_CANCEL_THRESHOLD = 3;
   if (state.pool.consecutive_failures >= STRATUM_DOWN_CANCEL_THRESHOLD) {
-    const cancellable = state.owned_bids.filter((b) => !isPendingCancel(b));
+    const cancellable = state.owned_bids.filter(canChange);
     if (cancellable.length === 0) return [];
     return cancellable.map((bid) => ({
       kind: 'CANCEL_BID' as const,
@@ -93,7 +142,7 @@ export function decide(state: State): readonly Proposal[] {
   // ended in a 24h marketplace blacklist of the target). Cancel
   // active bids and, by returning here, never CREATE while stale.
   if (state.node_stale) {
-    const cancellable = state.owned_bids.filter((b) => !isPendingCancel(b));
+    const cancellable = state.owned_bids.filter(canChange);
     return cancellable.map((bid) => ({
       kind: 'CANCEL_BID' as const,
       braiins_order_id: bid.braiins_order_id,
@@ -145,7 +194,8 @@ export function decide(state: State): readonly Proposal[] {
   if (fillable === null) return [];
 
   const desiredBid = fillable + config.overpay_sat_per_eh_day;
-  const targetPrice = Math.min(desiredBid, effectiveCap);
+  const targetPrice = marketBidPrice(market, Math.min(desiredBid, effectiveCap));
+  if (targetPrice === null) return [];
   const cappedByCeiling = desiredBid > effectiveCap;
 
   // Cheap-mode check (#13 / #50 / #160): opportunistic scale-up when our
@@ -190,7 +240,10 @@ export function decide(state: State): readonly Proposal[] {
   }
 
   const minBidSpeed = Math.max(1.0, market.settings.min_bid_speed_limit_ph ?? 1.0);
-  const speedLimitPh = Math.max(minBidSpeed, effectiveTargetPh);
+  const requestedSpeed = Math.max(minBidSpeed, effectiveTargetPh);
+  const speedLimitPh = market.api_version === 'v2'
+    ? Math.min(requestedSpeed, market.settings.max_bid_speed_limit_ph)
+    : requestedSpeed;
   const tickSize = market.settings.tick_size_sat ?? 1000;
   // Deadband on EDIT_PRICE (#53 fix). fillable_ask jitters ±1-5 sat/PH/day
   // (~1,000-5,000 sat/EH/day) tick-to-tick as distant supply levels
@@ -243,15 +296,9 @@ export function decide(state: State): readonly Proposal[] {
     if (state.create_hold !== null) return [];
     // Budget resolution (#40). 0 = use full wallet balance, clamped to
     // 1 BTC. Skip the tick silently when balance is missing or empty.
-    let effectiveBudgetSat: number;
-    if (config.bid_budget_sat === 0) {
-      const availableSat =
-        state.balance?.accounts?.[0]?.available_balance_sat ?? null;
-      if (availableSat === null || availableSat <= 0) return [];
-      effectiveBudgetSat = Math.min(availableSat, BRAIINS_MAX_AMOUNT_SAT);
-    } else {
-      effectiveBudgetSat = config.bid_budget_sat;
-    }
+    const effectiveBudgetSat = createBudget(market, config.bid_budget_sat,
+      state.balance?.accounts?.[0]?.available_balance_sat, targetPrice, speedLimitPh);
+    if (effectiveBudgetSat === null) return [];
 
     return [
       {
@@ -275,7 +322,7 @@ export function decide(state: State): readonly Proposal[] {
   // cancel, do nothing this tick - the CREATE branch above stays
   // gated on the full owned_bids list, so the replacement waits for
   // Braiins to actually drop the old order.
-  const actionable = owned_bids.filter((b) => !isPendingCancel(b));
+  const actionable = owned_bids.filter(canChange);
   const [primary, ...extras] = [...actionable].sort((a, b) =>
     a.braiins_order_id.localeCompare(b.braiins_order_id),
   );

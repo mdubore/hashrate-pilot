@@ -25,6 +25,7 @@ export {
 export {
   BraiinsApiError,
   BraiinsAuthMissingError,
+  BraiinsInvalidRequestError,
   BraiinsNetworkError,
   readGrpcMessage,
 } from './errors.js';
@@ -33,3 +34,4 @@ export {
   type AuthRole,
   type BraiinsTokens,
 } from './auth.js';
+export { normalizeV2BidState } from './v2-bid.js';

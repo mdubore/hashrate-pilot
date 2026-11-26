@@ -1,18 +1,22 @@
 /**
  * Custom error types for the Braiins Hashpower API client.
  *
- * Braiins reports API-level error reasons in the response header
- * `grpc-message` (URL-encoded UTF-8). See RESEARCH.md §2.
+ * The v1 adapter reads the percent-encoded grpc-message response header.
+ * The v2 adapter reads google.rpc.ErrorInfo from the response body.
  */
 
 export class BraiinsApiError extends Error {
   public readonly status: number;
+  public readonly reason: string | undefined;
+  public readonly retryAt: number | undefined;
   public readonly grpcMessage: string | undefined;
   public readonly endpoint: string;
   public readonly body: unknown;
 
   constructor(args: {
     status: number;
+    reason?: string | undefined;
+    retryAt?: number | undefined;
     endpoint: string;
     grpcMessage?: string | undefined;
     body?: unknown;
@@ -22,6 +26,8 @@ export class BraiinsApiError extends Error {
     super(args.message ?? `Braiins API ${args.endpoint} returned ${args.status}${grpcPart}`);
     this.name = 'BraiinsApiError';
     this.status = args.status;
+    this.reason = args.reason;
+    this.retryAt = args.retryAt;
     this.endpoint = args.endpoint;
     this.grpcMessage = args.grpcMessage;
     this.body = args.body;
@@ -63,4 +69,9 @@ export class BraiinsNetworkError extends Error {
     this.name = 'BraiinsNetworkError';
     this.endpoint = endpoint;
   }
+}
+
+/** A local validation failure before submitting a bid command to the exchange. */
+export class BraiinsInvalidRequestError extends Error {
+  override readonly name = 'BraiinsInvalidRequestError';
 }

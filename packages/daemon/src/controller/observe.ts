@@ -15,6 +15,8 @@
  * previous tick; the controller passes them in via `previousBelowFloorSince`.
  */
 
+import type { BidsResponse } from '@hashrate-autopilot/braiins-client';
+
 import { cheapestAskForDepth } from './orderbook.js';
 import type { BraiinsService } from '../services/braiins-service.js';
 import type { DatumPoller } from '../services/datum.js';
@@ -138,6 +140,7 @@ interface ApiBid {
   avg_speed_ph: number;
   progress_pct: number;
   amount_remaining_sat: number;
+  amount_consumed_sat: number | null;
   status: string;
   /** #89: persisted per tick on the primary owned bid only. */
   last_pause_reason: string | null;
@@ -350,7 +353,7 @@ export async function observe(deps: ObserveDeps, inputs: ObserveInputs): Promise
   const btc_usd_price = btcSnapshot?.usd_per_btc ?? null;
   const btc_usd_price_source = btcSnapshot?.source ?? null;
 
-  const apiBids = extractBids(bidsResponse);
+  const apiBids = extractBids(bidsResponse, deps.braiins.apiVersion);
   const owned_bids: OwnedBidSnapshot[] = [];
   const unknown_bids: UnknownBidSnapshot[] = [];
   const reconcilable: ReconcilableBid[] = [];
@@ -366,7 +369,7 @@ export async function observe(deps: ObserveDeps, inputs: ObserveInputs): Promise
         avg_speed_ph: b.avg_speed_ph,
         progress_pct: b.progress_pct,
         amount_remaining_sat: b.amount_remaining_sat,
-        amount_consumed_sat: Math.max(0, b.amount_sat - b.amount_remaining_sat),
+        amount_consumed_sat: b.amount_consumed_sat,
         status: b.status,
         last_price_decrease_at: lastPriceDecreaseByOrder.get(b.braiins_order_id) ?? null,
         last_pause_reason: b.last_pause_reason,
@@ -378,7 +381,7 @@ export async function observe(deps: ObserveDeps, inputs: ObserveInputs): Promise
         price_sat: b.price_sat,
         amount_sat: b.amount_sat,
         speed_limit_ph: b.speed_limit_ph,
-        amount_consumed_sat: Math.max(0, b.amount_sat - b.amount_remaining_sat),
+        amount_consumed_sat: b.amount_consumed_sat,
       });
     } else {
       unknown_bids.push({
@@ -395,7 +398,7 @@ export async function observe(deps: ObserveDeps, inputs: ObserveInputs): Promise
   // Ledger reconciliation (targeted UPDATEs only; never inserts).
   if (reconcilable.length > 0) {
     try {
-      await deps.ownedBidsRepo.reconcileFromApi(tickAt, reconcilable);
+      await deps.ownedBidsRepo.reconcileFromApi(tickAt, reconcilable, deps.braiins.apiVersion === 'v2');
     } catch (err) {
       console.warn(`[observe] ledger reconciliation failed: ${(err as Error).message}`);
     }
@@ -413,7 +416,20 @@ export async function observe(deps: ObserveDeps, inputs: ObserveInputs): Promise
       const presentIds = new Set(apiBids.map((b) => b.braiins_order_id));
       const candidates = await deps.ownedBidsRepo.listActiveForPrune();
       const vanished = selectVanishedLedgerBids(candidates, presentIds, 3 * 60_000, tickAt);
-      if (vanished.length > 0) {
+      if (deps.braiins.apiVersion === 'v2') {
+        // A v2 bid may disappear from the current list before it is
+        // readable. Only an explicit terminal state can release ownership.
+        for (const id of vanished) {
+          try {
+            const { bid, counters_committed } = await deps.braiins.getBidDetail(id);
+            if (bid.id === id && (bid.status === 'BID_STATUS_CANCELED' || bid.status === 'BID_STATUS_FULFILLED')) {
+              await deps.ownedBidsRepo.setKnownStatus(id, bid.status, counters_committed?.amount_consumed_sat);
+            }
+          } catch (err) {
+            console.warn(`[observe] waiting to confirm bid ${id}: ${(err as Error).message}`);
+          }
+        }
+      } else if (vanished.length > 0) {
         await deps.ownedBidsRepo.markCancelledMany(vanished);
         console.warn(
           `[observe] cleared ${vanished.length} stale ledger bid(s) no longer at Braiins: ${vanished.join(', ')}`,
@@ -626,29 +642,13 @@ async function collectMarket(braiins: BraiinsService): Promise<MarketSnapshot> {
   ]);
   const best_bid_sat = orderbook.bids?.[0]?.price_sat ?? null;
   const best_ask_sat = orderbook.asks?.[0]?.price_sat ?? null;
-  return { stats, orderbook, settings, fee, best_bid_sat, best_ask_sat };
+  return { api_version: braiins.apiVersion, stats, orderbook, settings, fee, best_bid_sat, best_ask_sat };
 }
 
-function extractBids(bidsResponse: { items?: unknown[] } | null): ApiBid[] {
+export function extractBids(bidsResponse: BidsResponse | null, apiVersion: 'v1' | 'v2'): ApiBid[] {
   if (!bidsResponse?.items) return [];
   const out: ApiBid[] = [];
-  for (const raw of bidsResponse.items) {
-    const item = raw as {
-      bid?: {
-        id?: string;
-        price_sat?: number;
-        amount_sat?: number;
-        speed_limit_ph?: number | null;
-        status?: string;
-        last_pause_reason?: string;
-        fee_rate_pct?: number;
-      };
-      state_estimate?: {
-        avg_speed_ph?: number;
-        progress_pct?: number;
-        amount_remaining_sat?: number;
-      };
-    };
+  for (const item of bidsResponse.items) {
     const bid = item.bid;
     if (!bid?.id) continue;
     const status = bid.status ?? 'UNKNOWN';
@@ -658,14 +658,19 @@ function extractBids(bidsResponse: { items?: unknown[] } | null): ApiBid[] {
     // we floor to 0. For ACTIVE bids we trust the value.
     const rawAvg = item.state_estimate?.avg_speed_ph ?? 0;
     const avg_speed_ph = status === 'BID_STATUS_ACTIVE' ? rawAvg : 0;
+    const amount = bid.amount_sat ?? 0;
+    const remaining = item.state_estimate?.amount_remaining_sat ?? amount;
     out.push({
       braiins_order_id: bid.id,
       price_sat: bid.price_sat ?? 0,
-      amount_sat: bid.amount_sat ?? 0,
+      amount_sat: amount,
       speed_limit_ph: bid.speed_limit_ph ?? null,
       avg_speed_ph,
       progress_pct: item.state_estimate?.progress_pct ?? 0,
-      amount_remaining_sat: item.state_estimate?.amount_remaining_sat ?? bid.amount_sat ?? 0,
+      amount_remaining_sat: remaining,
+      amount_consumed_sat: apiVersion === 'v2'
+        ? item.counters_committed?.amount_consumed_sat ?? null
+        : Math.max(0, amount - remaining),
       status,
       last_pause_reason:
         bid.last_pause_reason && bid.last_pause_reason.length > 0

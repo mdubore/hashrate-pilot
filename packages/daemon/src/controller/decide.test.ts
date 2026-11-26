@@ -726,3 +726,124 @@ describe('decide - bid_budget_sat sentinel (0 = full wallet)', () => {
     expect(decide(s)[0]).toMatchObject({ kind: 'CREATE_BID', amount_sat: 50_000 });
   });
 });
+
+it.each([
+  "BID_STATUS_CREATING",
+  "BID_STATUS_UPDATING",
+  "BID_STATUS_UNSPECIFIED",
+])("waits for a confirmed bid state before editing %s", (status) => {
+  const pending = owned({ status, price_sat: 1 });
+  expect(decide(state({ owned_bids: [pending] }))).toEqual([]);
+  expect(decide(state({ owned_bids: [pending], node_stale: true }))).toEqual(
+    [],
+  );
+});
+
+// Production public /v2/spot/settings on 2026-11-26. Vary a cap in
+// individual cases to prove the proposal uses this snapshot.
+function v2Market(
+  overrides: Partial<MarketSnapshot["settings"]> = {},
+): MarketSnapshot {
+  const base = market();
+  return {
+    ...base,
+    api_version: "v2",
+    stats: { ...base.stats, status: "SPOT_INSTRUMENT_STATUS_ACTIVE" },
+    settings: {
+      ...base.settings,
+      tick_size_sat: 1000,
+      min_bid_price_sat: 1000,
+      max_bid_price_sat: 500_000_000,
+      min_limited_bid_amount_sat: 10_000,
+      max_limited_bid_amount_sat: 100_000_000,
+      min_limited_bid_duration_s: 1800,
+      min_bid_amount_sat: 10_000_000,
+      max_bid_amount_sat: 100_000_000,
+      min_bid_speed_limit_ph: 1,
+      max_bid_speed_limit_ph: 1.7976931348623157e293,
+      ...overrides,
+    },
+  };
+}
+
+describe("v2 market limits", () => {
+  it("rounds the target down to the published tick without exceeding the operator cap", () => {
+    const s = state({
+      market: v2Market(),
+      balance: {
+        accounts: [
+          {
+            subaccount: "one",
+            currency: "BTC",
+            total_balance_sat: 200_000,
+            available_balance_sat: 200_000,
+            blocked_balance_sat: 0,
+          },
+        ],
+      },
+      config: { ...BASE_CONFIG, max_bid_sat_per_eh_day: 45_072_493 },
+    });
+    expect(decide(s)[0]).toMatchObject({
+      kind: "CREATE_BID",
+      price_sat: 45_072_000,
+    });
+    expect(
+      decide({ ...s, market: v2Market({ min_bid_price_sat: 46_000_000 }) }),
+    ).toEqual([]);
+  });
+  it("holds a placement whose configured budget is outside the limited range or too short", () => {
+    const s = state({
+      market: v2Market(),
+      balance: {
+        accounts: [
+          {
+            subaccount: "one",
+            currency: "BTC",
+            total_balance_sat: 200_000,
+            available_balance_sat: 200_000,
+            blocked_balance_sat: 0,
+          },
+        ],
+      },
+      config: { ...BASE_CONFIG, target_hashrate_ph: 10, bid_budget_sat: 9_999 },
+    });
+    expect(decide(s)).toEqual([]);
+    expect(
+      decide({
+        ...s,
+        config: { ...s.config, bid_budget_sat: 10_000, target_hashrate_ph: 20 },
+      }),
+    ).toEqual([]);
+    expect(
+      decide({ ...s, config: { ...s.config, bid_budget_sat: 10_000 } })[0],
+    ).toMatchObject({ kind: "CREATE_BID", amount_sat: 10_000 });
+    expect(
+      decide({
+        ...s,
+        market: v2Market({ max_limited_bid_amount_sat: 9_999 }),
+        config: { ...s.config, bid_budget_sat: 10_000 },
+      }),
+    ).toEqual([]);
+  });
+  it("uses the published limited budget cap in full-wallet mode and preserves the existing 1 BTC ceiling", () => {
+    const s = state({
+      market: v2Market({ max_limited_bid_amount_sat: 120_000 }),
+      balance: {
+        accounts: [
+          {
+            subaccount: "one",
+            currency: "BTC",
+            total_balance_sat: 130_000,
+            blocked_balance_sat: 0,
+            available_balance_sat: 130_000,
+          },
+        ],
+      },
+      config: { ...BASE_CONFIG, bid_budget_sat: 0 },
+    });
+    expect(decide(s)[0]).toMatchObject({
+      kind: "CREATE_BID",
+      amount_sat: 120_000,
+    });
+  });
+});

@@ -150,6 +150,8 @@ describe('openDatabase - migrations', () => {
       '0122_tick_metrics_ocean_chain.sql',
       '0123_config_ocean_chain.sql',
       '0124_runtime_create_hold.sql',
+      '0125_braiins_v2_credentials.sql',
+      '0126_braiins_mutation_intents.sql',
     ]);
     expect(handle.migrations.skipped).toEqual([]);
   });

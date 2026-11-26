@@ -117,12 +117,17 @@ export class AccountSpendService {
     let active = 0;
     let seen = 0;
     let offset = 0;
+    let nextToken = '';
+    const visitedTokens = new Set<string>();
+    const seenBidIds = new Set<string>();
     const fetchStart = this.now();
 
     for (let i = 0; i < MAX_PAGES; i++) {
       let res;
       try {
-        res = await this.client.listBids({ limit: PAGE_SIZE, offset });
+        res = await this.client.listBids(
+          nextToken ? { limit: PAGE_SIZE, page_token: nextToken } : { limit: PAGE_SIZE, offset },
+        );
       } catch (err) {
         console.warn(
           `[account-spend] /spot/bid page offset=${offset} failed: ${(err as Error).message}`,
@@ -130,12 +135,21 @@ export class AccountSpendService {
         return null;
       }
       const items: BidItem[] = res.items ?? [];
-      if (items.length === 0) break;
+      if (items.length === 0 && !res.next_page_token) break;
 
       let newTerminalsOnThisPage = 0;
 
       for (const item of items) {
+        const bidId = bidIdOf(item);
+        if (bidId && seenBidIds.has(bidId)) continue;
+        if (bidId) seenBidIds.add(bidId);
         seen++;
+        if (res.next_page_token !== undefined && item.counters_committed?.amount_consumed_sat === undefined) {
+          // An unsettled v2 bid can lack the progress object. Keep the account
+          // total unknown until settled spend is available for every bid.
+          if (!bidId || !cachedIds.has(bidId)) return null;
+          continue;
+        }
         const consumed = consumedSatFor(item);
         if (!Number.isFinite(consumed) || consumed <= 0) continue;
 
@@ -155,6 +169,16 @@ export class AccountSpendService {
             newTerminalsOnThisPage++;
           }
         }
+      }
+
+      if (res.next_page_token !== undefined) {
+        // Cursor pages may be short or consist entirely of active bids.
+        // A failed scan may also have populated only the early cache rows.
+        nextToken = res.next_page_token;
+        if (!nextToken) break;
+        if (visitedTokens.has(nextToken) || i + 1 === MAX_PAGES) return null;
+        visitedTokens.add(nextToken);
+        continue;
       }
 
       // Short-circuit: if this whole page had zero new terminals, the

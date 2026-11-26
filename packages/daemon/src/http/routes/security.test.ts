@@ -1,5 +1,5 @@
 import Fastify, { type FastifyInstance } from 'fastify';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { registerSecurityRoutes, type SecurityRouteDeps } from './security.js';
 import { hashPassword } from '../../config/password-hash.js';
@@ -7,7 +7,11 @@ import { hashPassword } from '../../config/password-hash.js';
 // Mock the Braiins client so token validation doesn't hit the network:
 // "GOOD" authenticates, anything else is rejected.
 vi.mock('@hashrate-autopilot/braiins-client', () => ({
-  createBraiinsClient: (cfg: { ownerToken?: string; readOnlyToken?: string }) => ({
+  createBraiinsClient: (cfg: { ownerToken?: string; readOnlyToken?: string; apiKey?: string }) => ({
+    getAccountId: async () => {
+      if (cfg.apiKey !== 'TEST_API_KEY') throw new Error('unauthenticated');
+      return 'account-one';
+    },
     getBalance: async () => {
       const tok = cfg.ownerToken ?? cfg.readOnlyToken;
       if (tok === 'GOOD') return { available_sat: 0 };
@@ -22,14 +26,20 @@ function build(source: 'env' | 'sops' | 'db') {
   const applied: string[] = [];
   const setBraiinsToken = vi.fn(async () => true);
   const setDashboardPassword = vi.fn(async (_pw: string) => hashPassword('irrelevant'));
+  const saveV2Key = vi.fn();
   const deps: SecurityRouteDeps = {
-    secretsRepo: { setDashboardPassword, setBraiinsToken } as never,
+    secretsRepo: {
+      setDashboardPassword, setBraiinsToken, saveV2Key,
+      getBraiinsSettings: async () => ({ braiins_api_version: 'v1', braiins_account_id: null }),
+      getAccountBinding: async () => undefined,
+      getAccountWitness: async () => undefined,
+    } as never,
     secretSource: source,
     getCurrentPassword: () => hashPassword(CURRENT),
     setDashboardPassword: (h) => applied.push(h),
   };
   const app: FastifyInstance = Fastify();
-  return { app, deps, applied, setBraiinsToken, setDashboardPassword };
+  return { app, deps, applied, setBraiinsToken, setDashboardPassword, saveV2Key };
 }
 
 describe('security routes (#332)', () => {
@@ -41,7 +51,8 @@ describe('security routes (#332)', () => {
     await registerSecurityRoutes(app, h.deps); await app.ready();
     const res = await app.inject({ method: 'GET', url: '/api/security/state' });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ secret_source: 'db', editable: true });
+    expect(res.json()).toEqual({ secret_source: 'db', editable: true, braiins_editable: true,
+      braiins_active_api_version: 'v1', braiins_api_version: 'v1', braiins_account_id: null });
   });
 
   it('reports editable=false and refuses edits for env/SOPS', async () => {
@@ -101,6 +112,20 @@ describe('security routes (#332)', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ ok: true, applies_on_restart: true });
     expect(h.setBraiinsToken).toHaveBeenCalledWith('owner', 'GOOD');
+  });
+
+  it('switches with a read-only v2 account probe and never stores a mismatched key', async () => {
+    const h = build('db'); app = h.app;
+    await registerSecurityRoutes(app, h.deps);
+    const rotate = (account_id: string) => app.inject({
+      method: 'POST', url: '/api/security/braiins-token',
+      payload: { kind: 'v2', current_password: CURRENT, token: 'TEST_API_KEY', account_id },
+    });
+    expect((await rotate('different')).statusCode).toBe(422);
+    expect(h.saveV2Key).not.toHaveBeenCalled();
+    expect((await rotate('account-one')).statusCode).toBe(200);
+    expect(h.saveV2Key).toHaveBeenCalledWith('TEST_API_KEY', 'account-one', 'account-one');
+    expect(h.setBraiinsToken).not.toHaveBeenCalled();
   });
 
   it('refuses a Braiins token that fails validation (422), stores nothing', async () => {

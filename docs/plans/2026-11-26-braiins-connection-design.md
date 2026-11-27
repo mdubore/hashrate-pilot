@@ -6,7 +6,7 @@ This design covers the operator-facing changes to the dual API implementation in
 
 Open with **Connect to Braiins Hashpower** and one masked field labeled **Braiins ID API key (v2)**. Explain where to create a key and how to choose access. Viewer can monitor an account. Admin can also place, change and cancel bids. [Braiins key permissions](https://academy.braiins.com/braiins-hashpower/api#what-a-key-can-do)
 
-Show **Verify connection** beside the v2 field. After a successful account read, show **Connected to Acme Mining. Account read access verified.** Use the account ID if Braiins omits its display name. Editing the key clears that result. Completing setup starts Autopilot in **DRY-RUN**. Enabling LIVE is a separate operator action.
+Show an optional **Verify connection** button beside the v2 field. Operators can choose **Next** directly. Saving setup always verifies the selected v2 key again. After a successful account read, show **Connected to Acme Mining. Account read access verified.** Use the account ID if Braiins omits its display name. Editing the key clears that result. Completing setup starts Autopilot in **DRY-RUN**. Enabling LIVE is a separate operator action.
 
 Keep **Use an existing legacy token (v1)** visible beneath the v2 field. Expanding it switches the form to **Owner token** and **Read-only token (optional)**, with a way back to the Braiins ID key. Submit only the selected credentials. This lets an operator reinstall with an existing token while keeping the first screen focused on the credential Braiins currently issues. [Braiins migration reference](https://academy.braiins.com/braiins-hashpower/api#migrating-from-v1)
 
@@ -18,7 +18,8 @@ An ordinary upgrade preserves the active protocol and run mode. In **Config → 
 | --- | --- |
 | v1 active | **Connected using a legacy token (v1)** and **Migrate to Braiins ID**. Existing token rotation remains available. |
 | Migration saved, before restart | **v1 is active. Restart to activate v2.** Bid changes remain on hold. |
+| v2 active, awaiting explicit LIVE | **Review your balance and owned bids before enabling LIVE.** This prompt survives a restart. Keep **Rotate API key** available for dashboard-managed credentials so the operator can replace a key with insufficient permissions. |
 | v2 active | **Connected using Braiins ID (v2)** and **Rotate API key** for the bound account. |
-| Credentials managed by environment or SOPS | Show the active version, the credential source and instructions for updating it there. |
+| Credentials managed by environment or SOPS | Show the active version and where to update each credential. If environment variables override part of a SOPS or database configuration, name the variables and identify the underlying store for the other fields. The v2 review prompt remains visible when applicable. |
 
 For migration, explain the one-way database binding before saving. Select DRY-RUN and let an in-flight bid change finish. Enter the dashboard password, expected Braiins account ID and candidate key. Verify the account and available local history, then save. A failed check leaves the current credentials usable. After restart, ask the operator to review the balance and owned bids before choosing LIVE. A read-access check never submits a bid. [Migration procedure](../configuration.md#braiins-hashpower-api-version)

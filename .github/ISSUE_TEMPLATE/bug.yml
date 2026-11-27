@@ -1,7 +1,7 @@
 name: Bug report
 description: Something isn't working the way it should
 title: "[bug] "
-labels: ["bug", "backlog", "user-submitted"]
+labels: ["bug"]
 body:
   - type: markdown
     attributes:
@@ -14,7 +14,7 @@ body:
         details - have a look before posting.
 
         If this is a security issue, **don't post here.** See
-        [SECURITY.md](https://github.com/rdouma/hashrate-autopilot/blob/main/SECURITY.md).
+        [SECURITY.md](https://github.com/mdubore/hashrate-pilot/blob/main/SECURITY.md).
 
   - type: input
     id: version
@@ -34,7 +34,6 @@ body:
       label: Install path
       description: How are you running the autopilot?
       options:
-        - Umbrel (Community App Store)
         - Docker (manual `docker run` / docker-compose)
         - Bare-metal Node + pnpm
         - Other (please describe in the bug body)
@@ -83,8 +82,7 @@ body:
     attributes:
       label: Relevant daemon log lines, if any
       description: |
-        For Umbrel: `docker logs --tail 200 rdouma-hashrate-autopilot_web_1`
-        For Docker: `docker logs --tail 200 hashrate-autopilot`
+        For Docker: `docker logs --tail 200 hashrate-pilot`
         Bare-metal: from the terminal you ran `pnpm daemon` in.
         Tokens are redacted automatically; double-check before posting.
       render: shell

@@ -7,7 +7,7 @@
 #   regressions before they reach a release tag.
 # - **Publish** (`v*` tag, manual dispatch): builds for both
 #   `linux/amd64` and `linux/arm64` and pushes to
-#   `ghcr.io/<owner>/hashrate-autopilot` with every relevant tag
+#   `ghcr.io/<owner>/<repository>` with every relevant tag
 #   permutation (vX.Y.Z, vX.Y, vX, latest).
 #
 # ARM64 is mandatory for appliance deployments - Umbrel and Start9
@@ -80,7 +80,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ghcr.io/${{ github.repository_owner }}/hashrate-autopilot
+          images: ghcr.io/${{ github.repository }}
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}

@@ -130,6 +130,8 @@ const button = (page, name) => page.getByRole('button', { name, exact: true });
 test('Setup opens with the v2 key and a keyboard-operable legacy disclosure', async (t) => {
   const page = await visit(t, '/setup', setup);
   await button(page, 'Next →').waitFor();
+  assert.equal(await page.title(), 'Hashrate Pilot');
+  await page.getByRole('heading', { name: 'Hashrate Pilot - First-run setup' }).waitFor();
   const legacy = button(page, 'Use an existing legacy token (v1)');
   assert.equal(await legacy.isVisible(), true, 'the wizard offers the legacy disclosure');
   assert.equal(await legacy.getAttribute('aria-expanded'), 'false');

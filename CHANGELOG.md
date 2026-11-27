@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-27
+
+### `[UI]` Introduce Hashrate Pilot
+
+The dashboard, support bundles and notifications now identify this community continuation as Hashrate Pilot. The project has its own issue tracker and private security reporting.
+
 ## 2026-11-26
 
 ### `[UI]` Verify a Braiins connection and follow migration in the dashboard

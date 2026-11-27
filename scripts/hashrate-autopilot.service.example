@@ -1,4 +1,4 @@
-# systemd unit template for the Hashrate Autopilot daemon (bare-metal install).
+# systemd unit template for the Hashrate Pilot daemon (bare-metal install).
 #
 # Copy to /etc/systemd/system/hashrate-autopilot.service, fill in the three
 # placeholders below, then:
@@ -23,7 +23,7 @@
 # update __PNPM_PATH__ here and re-run `sudo systemctl daemon-reload`.
 
 [Unit]
-Description=Hashrate Autopilot daemon
+Description=Hashrate Pilot daemon
 After=network-online.target
 Wants=network-online.target
 

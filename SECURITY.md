@@ -2,38 +2,13 @@
 
 ## Reporting a vulnerability
 
-Hashrate Autopilot is a Bitcoin tool, so I take security reports
-seriously. **Please don't post exploits, suspected vulnerabilities,
-or anything that could enable an attack against another operator's
-funds in public issues, public discussions, pull requests, or any
-public channel.**
-
-Use one of these instead:
-
-- **GitHub's private vulnerability reporting feature.** From this
-  repo's Security tab, click "Report a vulnerability." That opens a
-  private channel between you and me with the same workflow as a
-  normal issue but invisible to anyone else. Preferred.
-- **Email**: `rdouma@cygno.com`. Encrypt if you'd like; I can share
-  a PGP key on request.
-
-I'll confirm I've read your report within a few days. If your report
-is reproducible and I agree it's a real vulnerability, I'll work on a
-fix and coordinate disclosure with you - typically a private patch,
-followed by a public release with a credit if you want one.
-
-This is a hobby project run by one person in their spare time. I try
-to respond soon, but I'm not on it 24/7 and there's no service-level
-agreement attached to any of this. If a report is critical and you
-haven't heard back in a week, feel free to ping the email again or
-ask in a (non-exploit) public issue whether I've seen anything.
+Report suspected vulnerabilities in Hashrate Pilot privately using GitHub. Include the affected build, the impact, and steps to reproduce with synthetic credentials. The report goes directly to the maintainers of this repository. [Report a vulnerability](https://github.com/mdubore/hashrate-pilot/security/advisories/new)
 
 ## What's in scope
 
 - The autopilot daemon itself (`packages/daemon/**`)
 - The dashboard (`packages/dashboard/**`) and the auth flow
-- The Umbrel community-store package (`rdouma-hashrate-autopilot/**`)
-- The Docker image published to `ghcr.io/rdouma/hashrate-autopilot`
+- The application built from this repository, including its Dockerfile
 - The setup wizard's secret-handling paths
 
 ## What's out of scope
@@ -69,7 +44,7 @@ Env- and SOPS-sourced secrets are never written to disk in the clear;
 DB-sourced secrets are the encrypted-at-rest path above. Full detail:
 [`docs/security-secrets-at-rest.md`](docs/security-secrets-at-rest.md).
 
-## Past advisories
+## Advisories inherited from Hashrate Autopilot
 
 - **GHSA-wvpp-w528-9p8x** (high): credentials were stored in plaintext in
   the SQLite database, so a copied database or backup exposed them.

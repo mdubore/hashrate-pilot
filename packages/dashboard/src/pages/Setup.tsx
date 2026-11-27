@@ -281,7 +281,7 @@ function Header({ step, info }: { step: Step; info: SetupInfoResponse }) {
   const stepLabels = [t`Access`, t`Mining`, t`Review`];
   return (
     <div className="mb-6">
-      <h1 className="text-2xl text-amber-400 font-semibold">Hashrate Autopilot - {verb}</h1>
+      <h1 className="text-2xl text-amber-400 font-semibold">Hashrate Pilot - {verb}</h1>
       <p className="text-sm text-slate-400 mt-1">
         {info.has_existing_config ? (
           <Trans>Existing config detected - fields are pre-filled. Update what changed and click through.</Trans>

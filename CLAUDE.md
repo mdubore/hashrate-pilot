@@ -1,5 +1,7 @@
 # Project conventions for Claude sessions
 
+Hashrate Pilot is maintained at `mdubore/hashrate-pilot`. Route new issues and pull requests there. Release procedures below that refer to `rdouma`, its container images, and its Umbrel listing document the original Hashrate Autopilot project. See the [current contributor guide](CONTRIBUTING.md).
+
 ## Model tiers (imported from the Domizello workflow, 2026-08-20)
 
 **Plan at the top, execute cheap.** Opus is the top tier (2026-09-24: the

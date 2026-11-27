@@ -4871,7 +4871,7 @@ function Field({
                 Datum build with that flag set, regardless of host platform.
               </Trans>{' '}
               <a
-                href="https://github.com/rdouma/hashrate-autopilot/blob/main/docs/setup-datum-api.md#background"
+                href="https://github.com/mdubore/hashrate-pilot/blob/main/docs/setup-datum-api.md#background"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-amber-300 hover:text-amber-200 underline"
@@ -6127,7 +6127,7 @@ function formatUptime(seconds: number): string {
 /** Build the paste-ready Markdown block. Plain string building - no i18n; the bundle is read by maintainers, not the operator. */
 function diagnosticsToMarkdown(d: DiagnosticsResponse): string {
   const lines: string[] = [];
-  lines.push('### Hashrate Autopilot support bundle');
+  lines.push('### Hashrate Pilot support bundle');
   lines.push('');
   lines.push(
     `v${d.identity.version} · build ${d.identity.build} · ${d.identity.hash} · node ${d.identity.node} · ${d.identity.platform} · ${d.identity.run_mode ?? '?'} · uptime ${formatUptime(d.identity.uptime_seconds)} · tick ${Math.round(d.identity.tick_interval_ms / 1000)}s`,

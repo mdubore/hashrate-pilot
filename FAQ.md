@@ -1,8 +1,8 @@
 # Frequently Asked Questions
 
 Short, get-you-started answers to the questions that come up most. For the full picture, see the [README](README.md) and
-the [docs](docs/). If your question isn't here, open an [issue](https://github.com/rdouma/hashrate-autopilot/issues) or
-a [discussion](https://github.com/rdouma/hashrate-autopilot/discussions).
+the [docs](docs/). If your question isn't here, open an [issue](https://github.com/mdubore/hashrate-pilot/issues) or
+a [discussion](https://github.com/mdubore/hashrate-pilot/discussions).
 
 New to how the pieces fit together? Start with [How does this all fit together?](#how-does-this-all-fit-together) - most
 setup confusion clears up once that picture is in place.
@@ -13,18 +13,18 @@ setup confusion clears up once that picture is in place.
 
 ### How does this all fit together?
 
-There are three moving parts, and Hashrate Autopilot only drives one of them:
+There are three moving parts, and Hashrate Pilot only drives one of them:
 
 ```
   Braiins Hashpower  →  your Datum Gateway  →  Ocean pool
   (you rent hashrate)   (Stratum in the middle)  (you mine, non-custodial)
 
-  Hashrate Autopilot watches all three over their APIs and places your bids.
+  Hashrate Pilot watches all three over their APIs and places your bids.
   It never sits in the path your hashrate actually flows through.
 ```
 
 You rent hashrate on the **Braiins Hashpower** marketplace. Braiins sends that hashrate to a **Stratum** endpoint you
-choose - normally your own **Datum Gateway**, which forwards it to the **Ocean** pool. Hashrate Autopilot is a separate
+choose - normally your own **Datum Gateway**, which forwards it to the **Ocean** pool. Hashrate Pilot is a separate
 program that talks to Braiins and Ocean through their APIs to decide what to bid and to show you what's happening. It is
 the autopilot, not the pipe.
 

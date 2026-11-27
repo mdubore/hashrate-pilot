@@ -175,7 +175,7 @@ export function Layout() {
               height={36}
               className="h-9 w-auto shrink-0"
             />
-            <div className="text-amber-400 font-semibold leading-tight">Hashrate Autopilot</div>
+            <div className="text-amber-400 font-semibold leading-tight">Hashrate Pilot</div>
           </div>
 
           {/* #266 follow-up: nav inline only at sm+; on mobile it
@@ -255,7 +255,7 @@ export function Layout() {
       <footer className="text-center text-[10px] text-slate-600 py-1">
         v{__APP_VERSION__} · build {__BUILD_NUMBER__} · {__BUILD_HASH__} ·{' '}
         <a
-          href="https://github.com/rdouma/hashrate-autopilot/blob/main/CHANGELOG.md"
+          href="https://github.com/mdubore/hashrate-pilot/blob/main/CHANGELOG.md"
           target="_blank"
           rel="noopener noreferrer"
           className="underline decoration-dotted hover:text-slate-400"

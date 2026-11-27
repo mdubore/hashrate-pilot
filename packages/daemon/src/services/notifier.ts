@@ -131,7 +131,7 @@ export class TelegramSink implements NotificationSink {
   async verify(): Promise<NotificationDeliveryResult> {
     return this.post(
       this.applyInstancePrefix(
-        'Hashrate Autopilot test message. If you see this, your bot token + chat id are wired correctly.',
+        'Hashrate Pilot test message. If you see this, your bot token + chat id are wired correctly.',
       ),
       {},
     );

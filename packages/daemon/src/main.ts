@@ -146,7 +146,7 @@ function installCrashHandlers(): void {
           const short = detail.length > 300 ? `${detail.slice(0, 300)}…` : detail;
           await Promise.race([
             emergencyNotify(
-              `🛑 Hashrate Autopilot crashed (${kind}): ${short} — systemd will restart it.`,
+              `🛑 Hashrate Pilot crashed (${kind}): ${short} — systemd will restart it.`,
             ),
             new Promise((r) => setTimeout(r, 4_000)),
           ]);

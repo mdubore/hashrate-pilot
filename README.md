@@ -1,14 +1,10 @@
-# Hashrate Autopilot
+# Hashrate Pilot
 
-> ⛔ **Project status (November 2026): end of life. Hashrate Autopilot stops working at the end of 2026.** Braiins is switching off the v1 Hashpower API this tool is built on at the end of 2026, and new Braiins accounts no longer get the API tokens it needs. Its replacement, the v2 API with Braiins ID, is not supported, and I won't port it: I stopped mining after BIP-110 was rejected and I no longer plan to update this project. v1.18.4 is the last release. Forks are welcome, and anyone who wants to port it to the v2 API is free to do so. Announcement: **[Hashrate Autopilot stops working at the end of 2026](https://github.com/rdouma/hashrate-autopilot/discussions/406)**. Why I stepped back: **[Why I'm stepping back from SHA-256 mining](https://github.com/rdouma/hashrate-autopilot/discussions/377)**.
+Hashrate Pilot monitors the Braiins Hashpower marketplace and manages rented hashrate bids for your Datum-connected mining pool. It supports Braiins ID API keys (v2) and existing legacy tokens (v1). New installations start in DRY-RUN. [Setup and migration](docs/configuration.md#braiins-hashpower-api-version)
 
-> 📦 **Already running the community-store version (`rdouma-hashrate-autopilot`) and switching to the official Umbrel App Store?** Don't just click Install - the official-store app id is different, so a straight install creates a second empty instance side-by-side with your existing data. Five-minute migration recipe (every step done from the umbrelOS Files app, no terminal needed) here: **[Migrating from the community store version](docs/migrating-from-community-store.md)**.
+This community-maintained project continues Remco Douma’s MIT-licensed Hashrate Autopilot. Upstream ended releases at v1.18.4 and welcomed a community v2 port. [Original project](https://github.com/rdouma/hashrate-autopilot) · [Maintainer’s announcement](https://github.com/rdouma/hashrate-autopilot/discussions/406)
 
-A personal-scale autopilot and monitor for the [Braiins Hashpower marketplace](https://hashpower.braiins.com/).
-Keeps a rented-hashrate bid continuously alive at an operator-chosen price ceiling, so purchased hashrate keeps
-landing at your own Datum-connected pool without manual babysitting.
-
-Hashpower v2 accepts a Braiins ID API key. Existing v1 installations can keep their legacy tokens during the transition. Braiins schedules v1 shutdown for the end of 2026. [Setup and migration instructions](docs/configuration.md#braiins-hashpower-api-version) · [Braiins migration guide](https://academy.braiins.com/braiins-hashpower/api#migrating-from-v1)
+**Current status.** The v2 implementation is available from source. Automated tests exercise the migration, bid handling, and dashboard with simulated marketplace responses. A read-only check with a real Braiins ID account is still pending. [Build from source](#installation) · [Report an issue](https://github.com/mdubore/hashrate-pilot/issues)
 
 > 💬 **New here, or something not behaving as expected?** The **[FAQ](FAQ.md)** covers the common setup and Profit & Loss questions - how the pieces fit together, what to put in the Stratum host field (and why a LAN IP won't work), and why your Profit & Loss can read as a loss early on.
 
@@ -568,36 +564,24 @@ packages/
 
 ## Installation
 
-The daemon needs a place to live (somewhere it can stay running 24/7), a Braiins account with an API
-token, and a way for you to reach the dashboard from a browser. Beyond that, four install paths exist.
-Pick whichever matches how the rest of your stack is run.
+Build Hashrate Pilot from this repository using Docker or Node. The daemon needs a Braiins Hashpower account, persistent storage and a host that can reach the marketplace and your mining services.
 
-### Choose your path
+| Installation | Requirements |
+|---|---|
+| [Docker](#path-b---docker-on-a-linux-box) | Build an image locally and mount a volume for the database. |
+| [Node](#path-c---bare-metal-node-install) | Use Node 22.22.2 or newer on the 22.x line, with pnpm 10.33.0. |
+| [Encrypted configuration](#path-d---power-user-cli-with-sops) | Add SOPS and age to the Node installation to manage secrets in an encrypted file. |
 
-| Path | Best when | Footprint |
-|---|---|---|
-| **A - Umbrel app store** | You already run Umbrel and want a one-click install. | Available in the official Umbrel App Store (search "Hashrate Autopilot"), and in the Community App Store (Path A below) which usually gets new versions a little sooner. |
-| **B - Docker on a Linux box** | You have a small always-on Linux machine (NUC, Mini PC, Raspberry Pi, VPS) and don't want to install a Node.js toolchain on it. | One container, one volume, one port. Recommended for a fresh box. |
-| **C - Bare-metal Node install** | You want to run from source, hack on it, or already have Node 22 + pnpm 10 around. | A git checkout + `pnpm install` + `./scripts/start.sh`. Same wizard as Path B. |
-| **D - Power-user CLI with SOPS** | You want secrets at rest in a `sops`-encrypted file (because that's how the rest of your ops is structured), not in `state.db`. | Adds `sops` + `age` to the bare-metal install; runs `pnpm run setup` instead of the web wizard. |
-
-All four end up at the same dashboard on port **3010**. All four boot the daemon in **DRY-RUN** -
-nothing trades real money until you flip the switch from the dashboard's Status page.
+The original Umbrel listing installs Hashrate Autopilot v1.18.4. Hashrate Pilot’s first packaged release is pending. [Upstream Umbrel migration notes](docs/migrating-from-community-store.md)
 
 > The wizard's setup endpoints are intentionally unauthenticated (the dashboard password is one of the
 > things you *create* there). On a public network, restrict access to port 3010 with a firewall,
 > Tailscale, or Tor until you've finished the wizard. Appliance platforms like Umbrel handle this
 > automatically - the dashboard is exposed only over Tor / LAN there.
 
-### Path A - Umbrel Community App Store
-
-Add the community app store URL to your Umbrel's **Settings - App stores** and search for "Hashrate Autopilot". The app declares Bitcoin Knots, Electrs, and Datum Gateway as dependencies - Umbrel will prompt you to install any that are missing. Once installed, the daemon auto-discovers all three services across Umbrel's shared Docker network: Bitcoin RPC creds come from Umbrel's standard `APP_BITCOIN_*` env vars, the Electrs host/port and payout source are pre-set via `BHA_*` env overrides in docker-compose.yml, and Datum's API URL is injected the same way. The result is a turnkey setup where the wizard's Mining step has every field pre-filled - walk through it, confirm, and the dashboard is live.
-
 ### Path B - Docker on a Linux box
 
-Recommended for the typical "I have a Mini PC / Raspberry Pi / VPS that just needs to run this thing"
-case. Docker handles the Node + pnpm + native-binding-build dance for you, and updating to a new
-version is a single `docker pull`.
+The Dockerfile builds the daemon and dashboard together from the checked-out commit.
 
 #### B.1. Install Docker (Ubuntu)
 
@@ -633,27 +617,31 @@ docker --version          # → Docker version 27.x or newer
 docker run --rm hello-world
 ```
 
-#### B.2. Run the autopilot
+#### B.2. Build and run Hashrate Pilot
+
+These commands create a fresh installation. To migrate an existing Docker installation, select DRY-RUN, stop the previous daemon, back up its data and reuse its volume and encryption key. The account check uses the bid history in that volume. [Migration instructions](docs/configuration.md#braiins-hashpower-api-version)
 
 ```bash
+git clone https://github.com/mdubore/hashrate-pilot.git
+cd hashrate-pilot
+docker build -t hashrate-pilot:local .
 docker run -d \
-  --name hashrate-autopilot \
+  --name hashrate-pilot \
   -p 3010:3010 \
-  -v hashrate-autopilot-data:/app/data \
+  -v hashrate-pilot-data:/app/data \
   --restart unless-stopped \
-  ghcr.io/rdouma/hashrate-autopilot:latest
+  hashrate-pilot:local
 ```
 
 What that does:
 
 - `-d` - runs detached.
 - `-p 3010:3010` - exposes the dashboard on port 3010 of the host.
-- `-v hashrate-autopilot-data:/app/data` - creates a Docker-managed named volume that persists every
+- `-v hashrate-pilot-data:/app/data` - creates a Docker-managed named volume that persists every
   operator-relevant file (config, secrets, tick history, owned-bid ledger). Surviving container
   recreation is the whole point.
 - `--restart unless-stopped` - if the host reboots or the container crashes, Docker brings it back.
-- `ghcr.io/rdouma/hashrate-autopilot:latest` - pulls the image from the GitHub Container Registry.
-  Multi-arch (`linux/amd64` + `linux/arm64`) so the same line works on a Pi.
+- `hashrate-pilot:local` - runs the image you built from your checkout.
 
 #### B.3. Open the wizard
 
@@ -681,15 +669,15 @@ env vars on `docker run`. Export `BHA_BRAIINS_API_KEY` in the invoking shell for
 
 ```bash
 docker run -d \
-  --name hashrate-autopilot \
+  --name hashrate-pilot \
   -p 3010:3010 \
-  -v hashrate-autopilot-data:/app/data \
+  -v hashrate-pilot-data:/app/data \
   -e BHA_BRAIINS_API_VERSION=v2 \
   -e BHA_BRAIINS_API_KEY \
   -e BHA_DASHBOARD_PASSWORD=… \
   -e BHA_TARGET_HASHRATE_PH=3.0 \
   --restart unless-stopped \
-  ghcr.io/rdouma/hashrate-autopilot:latest
+  hashrate-pilot:local
 ```
 
 Bitcoin Knots RPC creds auto-detect from the standard `BITCOIN_RPC_*` env vars Umbrel injects when
@@ -700,24 +688,24 @@ bitcoind. Full list of `BHA_*` overrides: [`docs/configuration.md`](docs/configu
 
 ```bash
 # Tail the logs (everything goes to stdout - no log files inside the container):
-docker logs -f hashrate-autopilot
+docker logs -f hashrate-pilot
 
 # Status:
-docker ps --filter name=hashrate-autopilot
+docker ps --filter name=hashrate-pilot
 
 # Stop / start / restart:
-docker stop hashrate-autopilot
-docker start hashrate-autopilot
-docker restart hashrate-autopilot
+docker stop hashrate-pilot
+docker start hashrate-pilot
+docker restart hashrate-pilot
 
-# Update to a new release:
-docker pull ghcr.io/rdouma/hashrate-autopilot:latest
-docker stop hashrate-autopilot && docker rm hashrate-autopilot
+# Update from the repository and rebuild the local image:
+git pull --ff-only
+docker build -t hashrate-pilot:local .
+docker stop hashrate-pilot && docker rm hashrate-pilot
 # re-run the docker run command from B.2 - the named volume preserves your state
 ```
 
-To pin to a specific version (recommended for production), replace `:latest` with `:vX.Y.Z`. See
-the [releases page](https://github.com/rdouma/hashrate-autopilot/releases).
+For a reproducible image, check out the desired commit before running `docker build`.
 
 ### Path C - Bare-metal Node install
 
@@ -736,10 +724,10 @@ sudo apt install -y nodejs
 
 # pnpm via corepack (no separate install needed)
 sudo corepack enable
-corepack prepare pnpm@latest --activate
+corepack prepare pnpm@10.33.0 --activate
 ```
 
-Verify with `node -v` (≥ v22) and `pnpm -v` (≥ 10).
+Verify with `node -v` (22.22.2 or newer on 22.x) and `pnpm -v` (10.33.0).
 
 On **macOS** (Homebrew):
 
@@ -750,8 +738,8 @@ brew install node pnpm
 #### C.2. Clone, build, run
 
 ```bash
-git clone https://github.com/rdouma/hashrate-autopilot && cd hashrate-autopilot
-pnpm install
+git clone https://github.com/mdubore/hashrate-pilot.git && cd hashrate-pilot
+pnpm install --frozen-lockfile
 pnpm build
 ./scripts/start.sh
 ```
@@ -799,15 +787,9 @@ On a **systemd box (C.5)** the daemon is not tracked by `data/daemon.pid`, so `r
 tests succeed, so a broken commit can't take your running autopilot down. Common patterns:
 
 - **Manual update** after you see a new release: just run it.
-- **Nightly cron** (fully hands-off): `0 4 * * * cd /path/to/hashrate-autopilot && ./scripts/deploy.sh >> ~/deploy.log 2>&1`
+- **Nightly cron** (fully hands-off): `0 4 * * * cd /path/to/hashrate-pilot && ./scripts/deploy.sh >> ~/deploy.log 2>&1`
 
-The script does a `git pull --ff-only`, so it only runs on a tracking branch (e.g. `main`). To pin
-to a tagged release, manage the checkout manually:
-
-```bash
-git fetch --tags && git checkout v1.3.0
-pnpm install && pnpm build && ./scripts/restart.sh
-```
+The script does a `git pull --ff-only`, so it only runs on a tracking branch (e.g. `main`). For a reproducible build, check out a specific commit before installing dependencies.
 
 #### C.5. Auto-start on boot (systemd)
 
@@ -996,10 +978,6 @@ own funds, your own API keys, and the legal status of hashrate trading in your j
 
 ## License
 
-MIT - see [`LICENSE`](LICENSE).
+Hashrate Pilot retains the MIT license and Remco Douma’s original copyright notice. [License](LICENSE)
 
-## Tip jar
-
-This is a passion project. I run it for my own setup and ship it because I think keeping mining decentralized is worth making easier. There's no paywall and never will be. But if it has saved you time, kept your hashrate profitable, or you just like that it exists, a tip is welcome.
-
-**Bitcoin:** `bc1qc5ad3ec655d8m4mt58pk39lkrsc222hk20rd73`
+To support the original author, see the [Hashrate Autopilot tip jar](https://github.com/rdouma/hashrate-autopilot#tip-jar).

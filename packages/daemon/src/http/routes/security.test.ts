@@ -44,15 +44,40 @@ function build(source: 'env' | 'sops' | 'db') {
 
 describe('security routes (#332)', () => {
   let app: FastifyInstance;
-  afterEach(async () => { await app?.close(); });
+  afterEach(async () => { vi.unstubAllEnvs(); await app?.close(); });
 
-  it('reports editable=true for a db source', async () => {
+  it('keeps DB credentials editable with unrelated environment settings', async () => {
+    vi.stubEnv('BHA_BRAIINS_PRICE_SMOOTHING_MINUTES', '4');
     const h = build('db'); app = h.app;
     await registerSecurityRoutes(app, h.deps); await app.ready();
     const res = await app.inject({ method: 'GET', url: '/api/security/state' });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ secret_source: 'db', editable: true, braiins_editable: true,
-      braiins_active_api_version: 'v1', braiins_api_version: 'v1', braiins_account_id: null });
+      braiins_active_api_version: 'v1', braiins_api_version: 'v1', braiins_account_id: null,
+      braiins_env_override_names: [], braiins_needs_live_confirmation: false });
+  });
+
+  it.each([
+    ['sops', 'BHA_BRAIINS_API_KEY'],
+    ['db', 'BHA_BRAIINS_ACCOUNT_ID'],
+    ['env', 'BHA_BRAIINS_API_VERSION'],
+  ] as const)('reports the %s credential source and %s override without exposing its value', async (source, variable) => {
+    vi.stubEnv(variable, 'synthetic-override');
+    const h = build(source); app = h.app;
+    let flag: 0 | 1 = 1;
+    vi.spyOn(h.deps.secretsRepo, 'getAccountBinding').mockImplementation(async () => ({
+      id: 1, account_id: 'bound-account', needs_live_confirmation: flag,
+    }));
+    await registerSecurityRoutes(app, { ...h.deps, braiinsVersion: 'v2' });
+    const state = await app.inject({ url: '/api/security/state' });
+    expect(state.json()).toMatchObject({
+      secret_source: source, editable: source === 'db', braiins_editable: false,
+      braiins_active_api_version: 'v2', braiins_env_override_names: [variable],
+      braiins_needs_live_confirmation: true,
+    });
+    expect(state.body).not.toContain('synthetic-override');
+    flag = 0;
+    expect((await app.inject({ url: '/api/security/state' })).json().braiins_needs_live_confirmation).toBe(false);
   });
 
   it('reports editable=false and refuses edits for env/SOPS', async () => {

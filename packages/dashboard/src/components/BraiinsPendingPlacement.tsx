@@ -1,9 +1,10 @@
 import { Trans, useLingui } from '@lingui/react/macro';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { api } from '../lib/api';
 
 export function BraiinsPendingPlacement() {
+  const queryClient = useQueryClient();
   const query = useQuery({
     queryKey: ['braiins-pending-mutation'],
     queryFn: api.pendingBraiinsMutation,
@@ -17,9 +18,10 @@ export function BraiinsPendingPlacement() {
       key={pending.request_id}
       requestId={pending.request_id}
       memo={pending.command.body.memo}
-      onResolved={() => {
-        void query.refetch();
-      }}
+      onResolved={() => Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['braiins-pending-mutation'] }),
+        queryClient.invalidateQueries({ queryKey: ['security-state'] }),
+      ])}
     />
   );
 }

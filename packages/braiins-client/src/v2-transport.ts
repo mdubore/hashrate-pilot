@@ -1,5 +1,10 @@
-import type { BraiinsClientConfig } from './client.js';
-import { BraiinsApiError, BraiinsAuthMissingError, BraiinsNetworkError } from './errors.js';
+import type { AccountInfo, BraiinsClientConfig } from './client.js';
+import {
+  BraiinsAccountSelectionError,
+  BraiinsApiError,
+  BraiinsAuthMissingError,
+  BraiinsNetworkError,
+} from './errors.js';
 import type { components } from './generated/v2.js';
 
 type Accounts = components['schemas']['braiins.hashpower.trading.v2.ListAccountsResponse'];
@@ -8,6 +13,7 @@ type Query = Record<string, boolean | number | string>;
 export interface V2Transport {
   get<T>(path: string, query?: Query): Promise<T>;
   write<T>(method: 'POST' | 'PATCH', path: string, body: object, deadlineMs?: number): Promise<T>;
+  accountInfo(): Promise<AccountInfo>;
   accountId(): Promise<string>;
   accountPath(suffix: string, spot?: boolean): Promise<string>;
 }
@@ -33,7 +39,7 @@ export function createV2Transport(config: BraiinsClientConfig): V2Transport {
   const base = (config.baseUrl ?? origin).replace(/\/$/, '');
   const fetchImpl = config.fetch ?? fetch;
   const sleep = config.sleep ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  let account: Promise<string> | undefined;
+  let account: Promise<AccountInfo> | undefined;
 
   async function request<T>(
     method: string,
@@ -121,25 +127,49 @@ export function createV2Transport(config: BraiinsClientConfig): V2Transport {
     }
   }
 
-  async function discover(): Promise<string> {
+  async function discover(): Promise<AccountInfo> {
     const result = await request<Accounts>('GET', '/accounts');
-    const ids = result.accounts?.map((a) => a.account_id) ?? [];
-    const selected = config.accountId ?? (ids.length === 1 ? ids[0] : undefined);
-    if (!selected || !ids.includes(selected) || selected === '.' || selected === '..') {
-      throw new Error('Braiins ID key must grant access to the configured Hashpower account');
+    if (!result || typeof result !== 'object' || Array.isArray(result)) {
+      throw new BraiinsNetworkError('GET /accounts', 'Invalid account response');
     }
-    return selected;
+    const { accounts = [], next_page_token: next } = result;
+    if (
+      !Array.isArray(accounts) ||
+      (next !== undefined && typeof next !== 'string') ||
+      accounts.some(
+        (a) =>
+          !a ||
+          typeof a !== 'object' ||
+          Array.isArray(a) ||
+          (a.account_id !== undefined && typeof a.account_id !== 'string') ||
+          (a.display_name !== undefined && typeof a.display_name !== 'string'),
+      )
+    ) {
+      throw new BraiinsNetworkError('GET /accounts', 'Invalid account list');
+    }
+    const selected =
+      config.accountId !== undefined
+        ? accounts.find((a) => a.account_id === config.accountId)
+        : accounts.length === 1 && !next
+          ? accounts[0]
+          : undefined;
+    const id = selected?.account_id;
+    if (!id?.trim() || id === '.' || id === '..') throw new BraiinsAccountSelectionError();
+    const name = selected?.display_name?.trim();
+    return Object.freeze({ account_id: id, ...(name && { display_name: name }) });
   }
-  function accountId(): Promise<string> {
+  function accountInfo(): Promise<AccountInfo> {
     // Share discovery between concurrent pollers. A transient discovery failure is recoverable.
     return (account ??= discover().catch((err) => {
       account = undefined;
       throw err;
     }));
   }
+  const accountId = async () => (await accountInfo()).account_id;
   return {
     get: (path, query) => request('GET', path, query),
     write: (method, path, body, deadlineMs) => request(method, path, undefined, body, deadlineMs),
+    accountInfo,
     accountId,
     accountPath: async (suffix, spot = false) =>
       (spot ? '/spot' : '') + '/accounts/' + encodeURIComponent(await accountId()) + suffix,

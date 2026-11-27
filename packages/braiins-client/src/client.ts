@@ -85,8 +85,14 @@ export interface CancelBidParams {
   readonly cl_order_id?: string;
 }
 
+export interface AccountInfo {
+  readonly account_id: string;
+  readonly display_name?: string;
+}
+
 export interface BraiinsClient {
   readonly apiVersion?: 'v1' | 'v2';
+  getAccountInfo?(): Promise<AccountInfo>;
   getAccountId?(): Promise<string>;
   getStats(): Promise<MarketStats>;
   getOrderbook(): Promise<OrderbookSnapshot>;

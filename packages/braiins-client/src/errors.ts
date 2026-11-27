@@ -71,6 +71,14 @@ export class BraiinsNetworkError extends Error {
   }
 }
 
+export class BraiinsAccountSelectionError extends Error {
+  override readonly name = 'BraiinsAccountSelectionError';
+
+  constructor() {
+    super('Braiins ID key must grant access to the configured Hashpower account');
+  }
+}
+
 /** A local validation failure before submitting a bid command to the exchange. */
 export class BraiinsInvalidRequestError extends Error {
   override readonly name = 'BraiinsInvalidRequestError';

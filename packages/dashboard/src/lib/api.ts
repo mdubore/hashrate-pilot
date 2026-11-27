@@ -838,17 +838,43 @@ async function publicGet<T>(path: string): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-async function publicPost<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(path, {
+function publicPostResponse(path: string, body: unknown): Promise<Response> {
+  return fetch(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify(body),
   });
+}
+
+async function publicPost<T>(path: string, body: unknown): Promise<T> {
+  const res = await publicPostResponse(path, body);
   const text = await res.text();
   if (!res.ok) {
     throw new Error(`${res.status} ${res.statusText}${text ? ` - ${text}` : ''}`);
   }
   return JSON.parse(text) as T;
+}
+
+export type BraiinsConnectionResult =
+  | { account_id: string; display_name?: string }
+  | { error: 'invalid_input' | 'credential_rejected' | 'account_unavailable' | 'temporarily_unavailable' };
+
+async function verifyBraiinsConnection(apiKey: string): Promise<BraiinsConnectionResult> {
+  try {
+    const response = await publicPostResponse('/api/setup/braiins/verify', { api_key: apiKey.trim() });
+    const data = await response.json() as { account_id?: unknown; display_name?: unknown; error?: unknown } | null;
+    if (response.status === 200 && typeof data?.account_id === 'string' && data.account_id.trim()) {
+      const displayName = typeof data.display_name === 'string' ? data.display_name.trim() : '';
+      return displayName ? { account_id: data.account_id, display_name: displayName } : { account_id: data.account_id };
+    }
+    if (response.status === 400 && data?.error === 'invalid_input') return { error: data.error };
+    if (response.status === 422 && (data?.error === 'credential_rejected' || data?.error === 'account_unavailable')) {
+      return { error: data.error };
+    }
+  } catch {
+    // A network failure or unreadable response can be retried with the same input.
+  }
+  return { error: 'temporarily_unavailable' };
 }
 
 type PendingBraiinsCommand =
@@ -865,6 +891,7 @@ export const api = {
     securityPost('/api/braiins/pending-mutation/confirm-not-placed', { request_id, confirmation_reference }),
   health: () => publicGet<HealthResponse>('/api/health'),
   setupInfo: () => publicGet<SetupInfoResponse>('/api/setup-info'),
+  verifyBraiinsConnection,
   submitSetup: (payload: SetupRequestPayload) =>
     publicPost<SetupResponse>('/api/setup', payload),
   status: () => request<StatusResponse>('/api/status'),
@@ -885,6 +912,8 @@ export const api = {
       secret_source: 'env' | 'sops' | 'db';
       editable: boolean;
       braiins_editable: boolean;
+      braiins_env_override_names: string[];
+      braiins_needs_live_confirmation: boolean;
       braiins_active_api_version: 'v1' | 'v2';
       braiins_api_version: 'v1' | 'v2';
       braiins_account_id: string | null;

@@ -314,9 +314,19 @@ const SECRETS_ENV: {
   dashboard_password: { varName: 'BHA_DASHBOARD_PASSWORD', coerce: asString },
 };
 
+export function braiinsCredentialOverrideNames(env: NodeJS.ProcessEnv): string[] {
+  return Object.entries(SECRETS_ENV)
+    .filter(([field, { varName }]) => field.startsWith('braiins_') && env[varName] !== undefined)
+    .map(([, { varName }]) => varName);
+}
+
 export function hasBraiinsCredentialOverrides(env: NodeJS.ProcessEnv): boolean {
-  return Object.entries(SECRETS_ENV).some(([field, { varName }]) =>
-    field.startsWith('braiins_') && env[varName] !== undefined);
+  return braiinsCredentialOverrideNames(env).length > 0;
+}
+
+export function braiinsCredentialManagement(source: 'env' | 'sops' | 'db', env: NodeJS.ProcessEnv) {
+  const overrideNames = braiinsCredentialOverrideNames(env);
+  return { overrideNames, editable: source === 'db' && overrideNames.length === 0 };
 }
 
 // ---------------------------------------------------------------------------

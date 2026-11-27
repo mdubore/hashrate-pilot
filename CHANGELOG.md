@@ -2,6 +2,10 @@
 
 ## 2026-11-26
 
+### `[UI]` Verify a Braiins connection and follow migration in the dashboard
+
+Setup can check a Braiins ID key and show its account before saving. Existing v1 operators can migrate from Config, see when to restart, and review their balance and bids in DRY-RUN before returning to LIVE. Config identifies environment overrides and keeps key rotation available when trading requires confirmation.
+
 ### `[Feature]` Support Braiins Hashpower v2 alongside v1
 
 Operators can connect a Braiins ID key and migrate existing spot bids to v2. Autopilot records v2 bid changes before transmission so a lost reply or restart can be reconciled without placing a duplicate order. Existing v1 installations keep their credentials and behavior.

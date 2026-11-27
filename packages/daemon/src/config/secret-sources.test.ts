@@ -87,6 +87,29 @@ describe('loadSecretsAnySource', () => {
     expect(r!.secrets.braiins_owner_token).toBe('db-owner');
   });
 
+  it('overrides only the v2 key from a SOPS source and retains its account and password', async () => {
+    await writeFile(sopsPath, `
+braiins_api_version: v2
+braiins_api_key: file-key
+braiins_account_id: acct
+dashboard_password: file-password-12
+`.trimStart());
+    const result = await loadSecretsAnySource({
+      sopsPath,
+      ageKeyPath: '/unused',
+      secretsRepo,
+      env: { BHA_BRAIINS_API_KEY: 'env-key' },
+    });
+    expect(result).toMatchObject({
+      source: 'sops',
+      secrets: {
+        braiins_api_key: 'env-key',
+        braiins_account_id: 'acct',
+        dashboard_password: 'file-password-12',
+      },
+    });
+  });
+
   it('env > sops > db priority', async () => {
     // All three populated; env should win.
     await writeFile(sopsPath, PLAINTEXT_SOPS_FILE, 'utf8');

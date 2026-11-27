@@ -46,9 +46,12 @@ issue #60.
 ### Braiins Hashpower API version
 
 1. In Braiins ID, open **Accounts**, select the Hashpower account and create an API key. Choose **Viewer** for monitoring or **Admin** to allow trading. Use the same account for an existing installation so its bids and spending history can be reconciled. [Account API keys](https://academy.braiins.com/braiins-id/api-keys)
-2. On a fresh install select v2 in setup. For a database-backed upgrade, select DRY-RUN, let any in-flight command finish, then open **Config → Security & credentials**. Enter the v2 key and the account ID for the selected account. With environment variables or SOPS, select DRY-RUN, stop the daemon, and set the version and key in the existing secret source. Keep the existing state database.
-3. Restart Autopilot. Verify the balance and owned bids against the account on Braiins. First activation of a v2 account requires explicit selection of LIVE. A successful balance check only verifies read access. If Braiins rejects a trade for insufficient permission, use an Admin key to trade.
-4. For rotation, create or rotate a key on the same account, update the configured secret source, and restart. A database bound to account A will reject a key for account B. Keep separate state databases for different accounts. Migration of a state database is one-way. A v2-bound database requires a key that grants its pinned account on subsequent boots.
+2. On a fresh install, enter your Braiins ID API key. **Verify connection** is an optional read-only check. It shows the account name or ID. You can also continue directly and let Autopilot validate the key when you save. To reinstall with a legacy token, select **Use an existing legacy token (v1)** and enter the owner token.
+3. Before migrating an existing installation, select DRY-RUN and let any pending bid change finish. Then follow the steps for the source shown under **Config → Security & credentials**.
+   - For **dashboard-managed credentials**, choose **Migrate to Braiins ID**. Enter the expected account ID, candidate key and current dashboard password. Autopilot checks the account against saved history. When Config confirms the credentials are saved, restart the daemon to activate v2.
+   - For **SOPS or environment variables**, stop the daemon. Set the API version to `v2`, the new key and the expected account ID in the source that supplies each field, then start the daemon. Config lists any Braiins environment variables that override SOPS or the database.
+4. On the first successful v2 boot, Autopilot binds the database to the verified account and enters DRY-RUN, including installations configured to start in LIVE. Under **Status**, review the balance and owned bids and explicitly enable LIVE when ready. A read-access check cannot establish permission to trade.
+5. To rotate a key, create a replacement on the same account. Choose **Rotate API key** in Config or update the managed secret source, then restart. Rotation remains available to dashboard-managed installations while LIVE confirmation is pending. A database bound to v2 requires a key for that account on subsequent boots. Use separate state databases for different accounts.
 
 Autopilot records each v2 bid change before sending it. If the exchange times out, a retry uses the original request ID and payload. When Braiins rate-limits every attempt, Autopilot waits for the reset before acting on its next decision. Cancellation can remain pending until Braiins reports a final state and releases the unused funds. If placement remains uncertain, Autopilot holds further placement. Check the current **and historical** bids on Braiins for the unique memo and matching terms. Under **Config → Security & credentials**, enter the confirmed bid ID to restore tracking. If Braiins independently confirms it never placed the bid, pause Autopilot and enter the confirmation reference there. A missing bid on the first page does not establish that placement failed. [Braiins retry and settlement rules](https://academy.braiins.com/braiins-hashpower/api#retrying-without-acting-twice)
 
@@ -83,9 +86,8 @@ no shell or SOPS), Config -> Pool & Payout -> **Security & credentials**
 lets you change the dashboard password (applied immediately) and rotate
 the Braiins ID key or legacy tokens (validated against Braiins before
 saving; applied on the next daemon restart), each gated on your current
-password. On env- or SOPS-sourced installs that section is read-only and
-points you back to this file, since a database write would be overwritten
-on the next boot. See [`credential-rotation.md`](credential-rotation.md).
+password. For environment- or SOPS-managed Braiins credentials, the section
+shows which source to edit. [Credential rotation design](credential-rotation.md)
 
 ## Targets and pricing
 

@@ -26,15 +26,57 @@ const bid = (state = 'BID_STATE_CREATED') => Response.json({ bid_id: 'B123', sta
 
 describe('Braiins v2 transport and bid operations', () => {
   it('discovers the account once and authenticates with its bearer key', async () => {
-    const { client, requests } = setup(accounts());
-    expect(await Promise.all([client.getAccountId!(), client.getAccountId!()])).toEqual([
-      account,
+    const { client, requests } = setup(
+      Response.json({
+        accounts: [{ account_id: account, display_name: 'Acme Mining', extra: 'private' }],
+      }),
+    );
+    expect(await Promise.all([client.getAccountInfo!(), client.getAccountId!()])).toEqual([
+      { account_id: account, display_name: 'Acme Mining' },
       account,
     ]);
     expect(requests).toHaveLength(1);
     expect(requests[0]?.url).toBe('https://hashpower.braiins.com/v2/accounts');
     expect(requests[0]?.headers.get('Authorization')).toBe('Bearer synthetic');
     expect(requests[0]?.headers.has('apikey')).toBe(false);
+  });
+
+  it.each([{}, { display_name: '   ' }])('omits an unavailable display name', async (fields) => {
+    const { client } = setup(Response.json({ accounts: [{ account_id: account, ...fields }] }));
+    expect(await client.getAccountInfo!()).toEqual({ account_id: account });
+  });
+
+  it.each([
+    {},
+    { accounts: [] },
+    { accounts: [{ account_id: 'a' }, { account_id: 'b' }] },
+    { accounts: [{ account_id: account }], next_page_token: 'more' },
+    { accounts: [{ account_id: '  ' }] },
+    { accounts: [{ account_id: '..' }] },
+  ])(
+    'reports an unusable account selection and retries discovery on the next call',
+    async (body) => {
+      const { client, requests } = setup(Response.json(body), accounts());
+      await expect(client.getAccountId!()).rejects.toMatchObject({
+        name: 'BraiinsAccountSelectionError',
+      });
+      expect(await client.getAccountInfo!()).toEqual({ account_id: account });
+      expect(requests).toHaveLength(2);
+    },
+  );
+
+  it('returns the configured account from a list and distinguishes an absent expected ID', async () => {
+    const body = {
+      accounts: [{ account_id: 'other' }, { account_id: account, display_name: 'Acme' }],
+    };
+    const { fetch } = setup(Response.json(body), Response.json(body));
+    const config = { apiVersion: 'v2' as const, apiKey: 'test', fetch };
+    const matched = createBraiinsClient({ ...config, accountId: account });
+    expect(await matched.getAccountInfo!()).toEqual({ account_id: account, display_name: 'Acme' });
+    const missing = createBraiinsClient({ ...config, accountId: 'absent' });
+    await expect(missing.getAccountId!()).rejects.toMatchObject({
+      name: 'BraiinsAccountSelectionError',
+    });
   });
 
   it('maps place, edit and cancel to the v2 wire contract', async () => {

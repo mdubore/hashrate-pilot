@@ -16,6 +16,7 @@ import { resolve, dirname } from 'node:path';
 
 import { createBitcoindClient } from '@hashrate-autopilot/bitcoind-client';
 
+import { applyBootMode } from './config/boot-mode.js';
 import { prepareBraiinsAccount, V1MigrationGuard } from './config/braiins.js';
 import { V2BidMutations } from './services/v2-bid-mutations.js';
 import { ChainTipPoller } from './services/chain-tip-poller.js';
@@ -428,26 +429,7 @@ async function bootOperational(
 
   await runtimeRepo.initializeIfMissing();
   const braiinsAccount = await prepareBraiinsAccount(deps.secretsRepo, secrets);
-  // boot_mode decides how run_mode is set at startup. LAST_MODE keeps whatever
-  // the operator last set, demoting PAUSED to DRY_RUN (we never auto-boot into
-  // PAUSED - that's only a reactive state).
-  const priorRuntime = await runtimeRepo.get();
-  const priorMode = priorRuntime?.run_mode ?? 'DRY_RUN';
-  let bootMode: 'DRY_RUN' | 'LIVE' | 'PAUSED';
-  switch (cfg.boot_mode) {
-    case 'ALWAYS_LIVE':
-      bootMode = 'LIVE';
-      break;
-    case 'LAST_MODE':
-      bootMode = priorMode === 'PAUSED' ? 'DRY_RUN' : priorMode;
-      break;
-    case 'ALWAYS_DRY_RUN':
-    default:
-      bootMode = 'DRY_RUN';
-      break;
-  }
-  if (braiinsAccount.requireDryRun) bootMode = 'DRY_RUN';
-  await runtimeRepo.patch({ run_mode: bootMode });
+  const { priorMode, bootMode } = await applyBootMode(runtimeRepo, cfg.boot_mode, braiinsAccount.requireDryRun);
   log(`run mode set to ${bootMode} on boot (boot_mode=${cfg.boot_mode}, was=${priorMode})`);
   // #287: surface boot-time mode transitions on the History page. Only
   // when the boot actually changed the mode - a LAST_MODE restart that

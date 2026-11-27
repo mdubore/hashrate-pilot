@@ -17,7 +17,7 @@ import type { FastifyInstance } from 'fastify';
 import { createBraiinsClient } from '@hashrate-autopilot/braiins-client';
 
 import { type V1MigrationGuard, verifyV2Credentials } from '../../config/braiins.js';
-import { hasBraiinsCredentialOverrides } from '../../config/env-overrides.js';
+import { braiinsCredentialManagement } from '../../config/env-overrides.js';
 import { verifyPassword } from '../../config/password-hash.js';
 import type { SecretsRepo } from '../../state/repos/secrets.js';
 
@@ -44,15 +44,19 @@ export async function registerSecurityRoutes(
 ): Promise<void> {
   const editable = deps.secretSource === 'db';
 
-  const braiinsEditable = editable && !hasBraiinsCredentialOverrides(process.env);
+  const management = braiinsCredentialManagement(deps.secretSource, process.env);
+  const activeVersion = deps.braiinsVersion ?? 'v1';
   app.get('/api/security/state', async () => {
     const saved = editable ? await deps.secretsRepo.getBraiinsSettings() : undefined;
+    const binding = activeVersion === 'v2' ? await deps.secretsRepo.getAccountBinding() : undefined;
     return {
       secret_source: deps.secretSource,
       editable,
-      braiins_editable: braiinsEditable,
-      braiins_active_api_version: deps.braiinsVersion ?? 'v1',
-      braiins_api_version: saved?.braiins_api_version ?? deps.braiinsVersion ?? 'v1',
+      braiins_editable: management.editable,
+      braiins_env_override_names: management.overrideNames,
+      braiins_needs_live_confirmation: binding?.needs_live_confirmation === 1,
+      braiins_active_api_version: activeVersion,
+      braiins_api_version: saved?.braiins_api_version ?? activeVersion,
       braiins_account_id: saved?.braiins_account_id ?? null,
     };
   });
@@ -90,7 +94,7 @@ export async function registerSecurityRoutes(
   app.post<{
     Body: { kind?: 'owner' | 'read_only' | 'v2'; current_password?: string; token?: string; account_id?: string };
   }>('/api/security/braiins-token', async (req, reply) => {
-    if (!braiinsEditable) {
+    if (!management.editable) {
       reply.code(409);
       return { error: 'managed_externally', secret_source: deps.secretSource };
     }

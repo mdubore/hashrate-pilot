@@ -229,6 +229,7 @@ export function Status() {
     onError: (_err, _vars, ctx) => {
       if (ctx?.previous) qc.setQueryData(['status'], ctx.previous);
     },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['security-state'], refetchType: 'all' }),
     onSettled: () => qc.invalidateQueries({ queryKey: ['status'] }),
   });
 

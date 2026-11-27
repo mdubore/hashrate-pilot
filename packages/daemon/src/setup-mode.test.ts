@@ -30,6 +30,8 @@ describe('createSetupModeServer', () => {
   let configRepo: ConfigRepo;
   let secretsRepo: SecretsRepo;
   let server: SetupModeServer;
+  const onSetupComplete = vi.fn();
+  const log = vi.fn();
 
   beforeEach(async () => {
     handle = await openDatabase({ path: ':memory:' });
@@ -38,16 +40,172 @@ describe('createSetupModeServer', () => {
     server = await createSetupModeServer({
       configRepo,
       secretsRepo,
-      // No-op exit so the timer-driven process.exit(0) doesn't tear
-      // down the test runner.
-      onSetupComplete: () => {},
+      onSetupComplete: onSetupComplete.mockClear(),
+      log: log.mockClear(),
     });
     await server.app.ready();
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await server.stop();
     await closeDatabase(handle);
+  });
+
+  describe('POST /api/setup/braiins/verify', () => {
+    const url = '/api/setup/braiins/verify';
+    const apiKey = 'synthetic-preview-key';
+    const account = { account_id: 'acct-1', display_name: 'Acme Mining' };
+    const verify = () =>
+      server.app.inject({
+        method: 'POST',
+        url,
+        payload: { api_key: '  ' + apiKey + '  ' },
+      });
+
+    it('makes one read to the v2 origin per check, without saving or completing setup', async () => {
+      const exchange = vi
+        .spyOn(globalThis, 'fetch')
+        .mockRejectedValue(new Error('unexpected exchange call'))
+        .mockResolvedValueOnce(Response.json({ accounts: [{ ...account, extra: apiKey }] }))
+        .mockResolvedValueOnce(Response.json({ accounts: [{ account_id: 'acct-2' }] }));
+      const first = await verify();
+      expect(first.statusCode).toBe(200);
+      expect(first.json()).toEqual(account);
+      const second = await verify();
+      expect(second.json()).toEqual({ account_id: 'acct-2' });
+      expect(exchange).toHaveBeenCalledTimes(2);
+      for (const [input, init] of exchange.mock.calls) {
+        expect(String(input)).toBe('https://hashpower.braiins.com/v2/accounts');
+        expect(init?.method).toBe('GET');
+        expect(new Headers(init?.headers).get('authorization')).toBe('Bearer ' + apiKey);
+        expect(init?.body).toBeUndefined();
+      }
+      expect(await configRepo.get()).toBeNull();
+      expect(await secretsRepo.exists()).toBe(false);
+      expect(await secretsRepo.getAccountBinding()).toBeUndefined();
+      expect(onSetupComplete).not.toHaveBeenCalled();
+      expect(JSON.stringify(log.mock.calls)).not.toContain(apiKey);
+    });
+
+    it.each([
+      '{}',
+      '{"api_key":"   "}',
+      '{"api_key":7}',
+      JSON.stringify({ api_key: apiKey, baseUrl: 'https://example.invalid' }),
+      '{"api_key":"' + apiKey,
+    ])('rejects invalid input with only an error code', async (payload) => {
+      const exchange = vi
+        .spyOn(globalThis, 'fetch')
+        .mockRejectedValue(new Error('unexpected call'));
+      const response = await server.app.inject({
+        method: 'POST',
+        url,
+        headers: { 'content-type': 'application/json' },
+        payload,
+      });
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toEqual({ error: 'invalid_input' });
+      expect(exchange).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['401', () => new Response(apiKey, { status: 401 }), 422, 'credential_rejected'],
+      ['403', () => new Response(apiKey, { status: 403 }), 422, 'credential_rejected'],
+      ['empty accounts', () => Response.json({ accounts: [] }), 422, 'account_unavailable'],
+      ['omitted accounts', () => Response.json({}), 422, 'account_unavailable'],
+      [
+        'multiple accounts',
+        () => Response.json({ accounts: [account, { account_id: 'acct-2' }] }),
+        422,
+        'account_unavailable',
+      ],
+      ['429', () => new Response(apiKey, { status: 429 }), 503, 'temporarily_unavailable'],
+      ['502', () => new Response(apiKey, { status: 502 }), 503, 'temporarily_unavailable'],
+      [
+        'timeout',
+        () => {
+          throw new DOMException(apiKey, 'TimeoutError');
+        },
+        503,
+        'temporarily_unavailable',
+      ],
+      ['invalid JSON', () => new Response(apiKey), 503, 'temporarily_unavailable'],
+      ['null account list', () => Response.json({ accounts: null }), 503, 'temporarily_unavailable'],
+      ['null response', () => Response.json(null), 503, 'temporarily_unavailable'],
+      ['array response', () => Response.json([]), 503, 'temporarily_unavailable'],
+      [
+        'unexpected shape',
+        () => Response.json({ accounts: apiKey }),
+        503,
+        'temporarily_unavailable',
+      ],
+    ] as const)(
+      'classifies %s without retrying or echoing upstream details',
+      async (_label, respond, code, error) => {
+        const exchange = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => respond());
+        const response = await verify();
+        expect(response.statusCode).toBe(code);
+        expect(response.json()).toEqual({ error });
+        expect(exchange).toHaveBeenCalledOnce();
+        expect(onSetupComplete).not.toHaveBeenCalled();
+        expect(JSON.stringify(log.mock.calls)).not.toContain(apiKey);
+      },
+    );
+
+    it.each(['revoked key', 'different history'] as const)(
+      'rechecks final credentials and preserves the database after a successful preview and %s',
+      async (failure) => {
+        const original = validSetupPayload();
+        await configRepo.upsert(original.config);
+        await secretsRepo.upsert(original.secrets);
+        handle.raw
+          .prepare("INSERT INTO owned_bids(braiins_order_id, created_at) VALUES ('B1', 0)")
+          .run();
+        const previousSecrets = await secretsRepo.get();
+        const previousConfig = await configRepo.get();
+        const accountReply = () => Response.json({ accounts: [account] });
+        const exchange = vi
+          .spyOn(globalThis, 'fetch')
+          .mockRejectedValue(new Error('unexpected exchange call'))
+          .mockResolvedValueOnce(accountReply())
+          .mockResolvedValueOnce(
+            failure === 'revoked key' ? new Response(null, { status: 401 }) : accountReply(),
+          );
+        if (failure === 'different history')
+          exchange.mockResolvedValueOnce(Response.json({ bids: [], next_page_token: '' }));
+        expect((await verify()).json()).toEqual(account);
+        const finalKey = failure === 'revoked key' ? apiKey : 'synthetic-other-key';
+        const final = await server.app.inject({
+          method: 'POST',
+          url: '/api/setup',
+          payload: {
+            config: { ...original.config, destination_pool_worker_name: 'replacement' },
+            secrets: {
+              braiins_api_version: 'v2',
+              braiins_api_key: finalKey,
+              dashboard_password: 'replacement-password',
+            },
+          },
+        });
+        expect(final.statusCode).toBe(422);
+        const paths = ['/v2/accounts', '/v2/accounts'];
+        if (failure === 'different history') paths.push('/v2/spot/accounts/acct-1/bids');
+        expect(exchange.mock.calls.map(([input]) => new URL(String(input)).pathname)).toEqual(
+          paths,
+        );
+        expect(exchange.mock.calls.every(([, init]) => init?.method === 'GET')).toBe(true);
+        expect(new Headers(exchange.mock.calls[1]?.[1]?.headers).get('authorization')).toBe(
+          'Bearer ' + finalKey,
+        );
+        expect(await configRepo.get()).toEqual(previousConfig);
+        expect(await secretsRepo.get()).toEqual(previousSecrets);
+        expect(await secretsRepo.getAccountBinding()).toBeUndefined();
+        expect(await secretsRepo.getAccountWitness()).toEqual({ bidIds: ['B1'] });
+        expect(onSetupComplete).not.toHaveBeenCalled();
+        expect((await server.app.inject({ url: '/api/health' })).json().mode).toBe('NEEDS_SETUP');
+      },
+    );
   });
 
   it('verifies a v2-only first run using just GET accounts and keeps the key out of setup-info', async () => {

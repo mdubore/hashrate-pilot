@@ -4,6 +4,7 @@ import {
   applyEnvOverridesToConfig,
   applyEnvOverridesToSecrets,
   buildSecretsFromEnv,
+  braiinsCredentialOverrideNames,
   KNOWN_ENV_VARS,
 } from './env-overrides.js';
 import { APP_CONFIG_DEFAULTS, AppConfigSchema, type Secrets } from './schema.js';
@@ -210,4 +211,13 @@ describe('KNOWN_ENV_VARS', () => {
       expect(v).toMatch(/^BHA_/);
     }
   });
+});
+
+it('reports the names of defined Braiins credential overrides, including an empty value', () => {
+  expect(braiinsCredentialOverrideNames({
+    BHA_BRAIINS_API_VERSION: 'v2',
+    BHA_BRAIINS_API_KEY: '',
+    BHA_BRAIINS_PRICE_SMOOTHING_MINUTES: '5',
+    BHA_DASHBOARD_PASSWORD: 'private',
+  })).toEqual(['BHA_BRAIINS_API_VERSION', 'BHA_BRAIINS_API_KEY']);
 });

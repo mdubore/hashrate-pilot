@@ -438,7 +438,7 @@ spend scope (autopilot-tagged bids only vs the whole Braiins account), **BTC pri
 the sat ↔ USD header toggle; CoinGecko / Coinbase / Bitstamp / Kraken), and **Security & credentials**
 (change the dashboard password and rotate a Braiins ID key or legacy tokens in-app, each gated on your
 current password; the only rotation path that needs no shell or SOPS, so it works on Umbrel - #332. On
-env/SOPS installs this section is read-only and points you to where those secrets are defined).
+env/SOPS installs this section shows where to update the credentials).
 
 ### Notifications
 
@@ -933,8 +933,10 @@ path on purpose so it doesn't collide with other `sops`-encrypted projects on th
 On a fresh install (no secrets configured) the daemon enters **NEEDS_SETUP** mode and the dashboard
 auto-redirects to `/setup`. Three steps:
 
-1. **Access** - choose Hashpower v2 and enter the API key from your account in Braiins ID. Use a Viewer
-   key for monitoring or an Admin key for trading. Choose v1 if you have legacy owner and read-only tokens.
+1. **Access** opens with **Braiins ID API key (v2)**. Enter a Viewer key for monitoring or an Admin
+   key for trading. **Verify connection** previews the account name or ID and confirms read access.
+   You can also continue directly. Autopilot verifies the key again when you save setup. If you already
+   have a v1 owner token, select **Use an existing legacy token (v1)**. The read-only token is optional.
    Set a dashboard password.
 2. **Mining** - target + minimum-floor hashrate, your Datum gateway / pool URL, the BTC payout
    address, the worker identity (`<btc-address>.<label>` - auto-derived from the address; the period
@@ -948,6 +950,12 @@ drops you on the Status page.
 
 Daemon boots in **DRY-RUN** by default - promote to LIVE from the dashboard when you've verified the
 autopilot is doing what you expect.
+
+**Already running v1?** An upgrade keeps your legacy credentials. To switch a dashboard-managed
+installation, select DRY-RUN and open **Config → Pool & Payout → Security & credentials → Migrate
+to Braiins ID**. After you save and restart, review the balance and owned bids on **Status** before
+enabling LIVE. The migration guide also covers SOPS and environment-managed installations.
+[Migration and key rotation](docs/configuration.md#braiins-hashpower-api-version)
 
 ## Editing secrets / running on a second host
 
@@ -965,9 +973,8 @@ Both behaviours are independent of which install path you picked.
    stay editable in their own Config sections as before.
 2. **`BHA_*` env-var override:** set the appropriate variable (e.g. `BHA_BRAIINS_API_KEY` for v2) in the daemon's
    environment and it takes precedence over the DB value on every boot. On Docker, that's
-   `docker run -e BHA_…`. See [`docs/configuration.md`](docs/configuration.md). On env/SOPS installs the
-   in-app Security section is read-only and points you here, since a DB write would be overwritten on the
-   next boot.
+   `docker run -e BHA_…`. Config names the Braiins environment overrides and shows where to edit
+   the other credentials. [Environment configuration](docs/configuration.md)
 3. **Re-run the wizard:** stop the daemon, run
    `sqlite3 data/state.db 'DELETE FROM secrets;'` to force NEEDS_SETUP, restart, and the dashboard
    redirects to `/setup` with your existing config pre-filled. For a v2 database, use a key for its existing Braiins account.

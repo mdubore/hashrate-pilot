@@ -4,7 +4,7 @@ import { t } from '@lingui/core/macro';
 import { useLingui } from '@lingui/react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router';
+import { Link, useNavigate, useSearchParams } from 'react-router';
 
 import { BraiinsPendingPlacement } from '../components/BraiinsPendingPlacement';
 import { ChartColorPicker } from '../components/ChartColorPicker';
@@ -1011,6 +1011,8 @@ function ConfigTabsAndContent({
       labels: [
         t`Change dashboard password`,
         t`Braiins ID API key (v2)`,
+        t`Migrate to Braiins ID`,
+        t`Rotate API key`,
         t`Rotate Braiins owner token`,
         t`Rotate Braiins read-only token`,
         // Aliases - operators search by intent.
@@ -5707,9 +5709,16 @@ function CopyIcon({ done }: { done: boolean }) {
 function SecuritySection() {
   const state = useQuery({
     queryKey: ['security-state'],
-    queryFn: () => api.securityState(),
+    queryFn: api.securityState,
     staleTime: 60_000,
+    // The daemon may restart or lose bid permissions while this section stays open.
+    refetchInterval: 30_000,
   });
+
+  const security = state.data;
+  const v2Active = security?.braiins_active_api_version === 'v2';
+  const migrationPending = security?.braiins_editable && !v2Active && security.braiins_api_version === 'v2';
+  const overrides = security?.braiins_env_override_names?.join(', ');
 
   return (
     <section className="bg-slate-900 border border-slate-800 rounded-lg p-4">
@@ -5734,38 +5743,52 @@ function SecuritySection() {
           <Trans>Could not load security settings.</Trans>
         </div>
       )}
-      {state.data && !state.data.editable && (
-        <div className="text-xs text-slate-400 bg-slate-950 border border-slate-800 rounded p-3 leading-relaxed">
-          {state.data.secret_source === 'sops' ? (
-            <Trans>
-              Your credentials come from your SOPS secrets file, not the database. Change them
-              with your SOPS tooling and restart the daemon. The in-app editors are disabled here
-              so a change couldn't be silently overwritten on the next boot.
-            </Trans>
-          ) : (
-            <Trans>
-              Your credentials come from environment variables, not the database. Change them
-              where they're defined and restart the daemon. The in-app editors are disabled here
-              so a change couldn't be silently overwritten on the next boot.
-            </Trans>
+      {security && (
+        <div className="space-y-4">
+          <h4 className="font-medium text-slate-200">
+            {v2Active ? <Trans>Connected using Braiins ID (v2)</Trans> : <Trans>Connected using a legacy token (v1)</Trans>}
+          </h4>
+          {migrationPending && (
+            <div role="status" className="rounded border border-amber-700 p-3 text-sm">
+              <p><Trans>v1 is active. Restart to activate v2.</Trans></p>
+              <p><Trans>Bid changes are on hold until restart.</Trans></p>
+            </div>
           )}
-        </div>
-      )}
-      {state.data?.braiins_active_api_version === 'v2' && <BraiinsPendingPlacement />}
-      {state.data && state.data.editable && (
-        <div className="space-y-6">
-          <ChangePasswordForm />
-          {state.data.braiins_editable ? (
+          {v2Active && security.braiins_needs_live_confirmation && (
+            <div role="status" className="rounded border border-amber-700 p-3 text-sm">
+              <p><Trans>Review your balance and owned bids before enabling LIVE.</Trans></p>
+              <Link to="/" className="text-amber-400 underline"><Trans>Open Status to review and change run mode.</Trans></Link>
+            </div>
+          )}
+          {v2Active && <BraiinsPendingPlacement />}
+          {!security.braiins_editable && (
+            <div className="rounded border border-slate-800 bg-slate-950 p-3 text-sm text-slate-300">
+              {overrides && (
+                <p><Trans>Update <code>{overrides}</code> in the service environment.</Trans></p>
+              )}
+              {security.secret_source === 'env' && <p><Trans>Manage credentials in the service environment and restart the daemon after changes.</Trans></p>}
+              {security.secret_source === 'sops' && (
+                <p>{overrides
+                  ? <Trans>Update the remaining credentials in your SOPS secrets file and restart the daemon.</Trans>
+                  : <Trans>Update your credentials in the SOPS secrets file and restart the daemon.</Trans>}</p>
+              )}
+              {security.secret_source === 'db' && (
+                <p><Trans>The remaining credentials come from the database. Remove the Braiins environment overrides and restart to edit Braiins credentials here.</Trans></p>
+              )}
+            </div>
+          )}
+          {security.braiins_editable && !migrationPending && (
             <>
-              <RotateTokenForm kind="v2" accountId={state.data.braiins_account_id} />
-              {state.data.braiins_api_version === 'v1' && (
+              <RotateTokenForm kind="v2" migrating={!v2Active} accountId={security.braiins_account_id} />
+              {!v2Active && (
                 <>
                   <RotateTokenForm kind="owner" />
                   <RotateTokenForm kind="read_only" />
                 </>
               )}
             </>
-          ) : <p className="text-xs text-slate-400"><Trans>Update your Braiins credentials in the service environment and restart.</Trans></p>}
+          )}
+          {security.editable && <ChangePasswordForm />}
         </div>
       )}
     </section>
@@ -5872,7 +5895,11 @@ function ChangePasswordForm() {
   );
 }
 
-function RotateTokenForm({ kind, accountId }: { kind: 'owner' | 'read_only' | 'v2'; accountId?: string | null | undefined }) {
+function RotateTokenForm({ kind, accountId, migrating = false }: {
+  kind: 'owner' | 'read_only' | 'v2';
+  accountId?: string | null;
+  migrating?: boolean;
+}) {
   const [expectedAccount, setExpectedAccount] = useState(accountId ?? '');
   const queryClient = useQueryClient();
   const [current, setCurrent] = useState('');
@@ -5900,21 +5927,19 @@ function RotateTokenForm({ kind, accountId }: { kind: 'owner' | 'read_only' | 'v
     });
   };
 
+  const title = kind === 'v2'
+    ? (migrating ? t`Migrate to Braiins ID` : t`Rotate API key`)
+    : (kind === 'owner' ? t`Rotate Braiins owner token` : t`Rotate Braiins read-only token`);
+  const tokenLabel = kind === 'v2' ? t`New API key` : kind === 'owner' ? t`New owner token` : t`New read-only token`;
   return (
-    <form onSubmit={onSubmit} className="space-y-2">
-      <div className="text-sm font-medium text-slate-300">
-        {kind === 'v2' ? (
-          <Trans>Braiins ID API key (v2)</Trans>
-        ) : kind === 'owner' ? (
-          <Trans>Rotate Braiins owner token</Trans>
-        ) : (
-          <Trans>Rotate Braiins read-only token</Trans>
-        )}
-      </div>
-      <p className="text-xs text-slate-500">
-        {kind === 'v2'
-          ? <Trans>Enter the account ID and key from Braiins ID. Select DRY-RUN before switching from v1. Restart to apply the verified key.</Trans>
-          : <Trans>The daemon validates the new token with Braiins and applies it after restart.</Trans>}
+    <form onSubmit={onSubmit} aria-label={title} className="space-y-2">
+      <h4 className="text-sm font-medium text-slate-300">{title}</h4>
+      <p className="text-xs text-slate-400">
+        {migrating ? (
+          <Trans>Select DRY-RUN on Status and wait for any bid change to finish. Saving prepares the verified key for restart. The first successful v2 startup permanently binds this database to the verified Braiins account.</Trans>
+        ) : kind === 'v2' ? (
+          <Trans>Use a new key for the same Braiins account. Restart the daemon to apply the verified key.</Trans>
+        ) : <Trans>The daemon validates the new token with Braiins and applies it after restart.</Trans>}
       </p>
       {kind === 'v2' && (
         <label className="block text-xs text-slate-400">
@@ -5927,6 +5952,7 @@ function RotateTokenForm({ kind, accountId }: { kind: 'owner' | 'read_only' | 'v
         <input
           type="password"
           autoComplete="current-password"
+          aria-label={t`Current password`}
           placeholder={t`Current password`}
           value={current}
           onChange={(e) => setCurrent(e.target.value)}
@@ -5935,7 +5961,8 @@ function RotateTokenForm({ kind, accountId }: { kind: 'owner' | 'read_only' | 'v
         <input
           type="password"
           autoComplete="off"
-          placeholder={kind === 'v2' ? t`New API key` : kind === 'owner' ? t`New owner token` : t`New read-only token`}
+          aria-label={tokenLabel}
+          placeholder={tokenLabel}
           value={token}
           onChange={(e) => setToken(e.target.value)}
           className={PW_INPUT_CLASS}
@@ -5947,7 +5974,7 @@ function RotateTokenForm({ kind, accountId }: { kind: 'owner' | 'read_only' | 'v
           disabled={mutation.isPending || !current || !token.trim() || (kind === 'v2' && !(accountId ?? expectedAccount).trim())}
           className="px-3 py-1.5 text-sm rounded border border-slate-700 text-slate-300 hover:bg-slate-800 disabled:opacity-50 whitespace-nowrap"
         >
-          {mutation.isPending ? <Trans>Validating…</Trans> : kind === 'v2' ? <Trans>Save API key</Trans> : <Trans>Rotate token</Trans>}
+          {mutation.isPending ? <Trans>Validating…</Trans> : migrating ? <Trans>Verify and save</Trans> : kind === 'v2' ? <Trans>Save API key</Trans> : <Trans>Rotate token</Trans>}
         </button>
         {result && result.ok && (
           <span className="text-xs text-emerald-300">

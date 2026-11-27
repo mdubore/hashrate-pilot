@@ -3,6 +3,7 @@ export {
   createBraiinsClient,
   type AccountBalance,
   type AccountBalances,
+  type AccountInfo,
   type BidDeliveryHistory,
   type BidDeliveryHistoryItem,
   type BidDetail,
@@ -23,6 +24,7 @@ export {
   type TransactionsResponse,
 } from './client.js';
 export {
+  BraiinsAccountSelectionError,
   BraiinsApiError,
   BraiinsAuthMissingError,
   BraiinsInvalidRequestError,

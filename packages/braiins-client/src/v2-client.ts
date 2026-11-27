@@ -65,6 +65,7 @@ export function createV2Client(config: BraiinsClientConfig): BraiinsClient {
   return {
     ...createV2Reads(transport),
     apiVersion: 'v2',
+    getAccountInfo: transport.accountInfo,
     getAccountId: transport.accountId,
     async placeBid(req, id, deadlineMs) {
       if (req.cl_order_id)

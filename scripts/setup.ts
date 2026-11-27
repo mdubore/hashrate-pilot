@@ -17,7 +17,7 @@ import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
-import { confirm, input, number, password } from '@inquirer/prompts';
+import { confirm, input, number, password, select } from '@inquirer/prompts';
 
 import {
   APP_CONFIG_DEFAULTS,
@@ -31,6 +31,7 @@ import {
   type Secrets,
 } from '@hashrate-autopilot/daemon';
 import { stringify as stringifyYaml } from 'yaml';
+import { createBraiinsClient } from '@hashrate-autopilot/braiins-client';
 
 // ---------------------------------------------------------------------------
 // Paths & args
@@ -155,19 +156,18 @@ async function writeEncryptedSecrets(
 
 async function promptSecrets(): Promise<Secrets> {
   console.log('\n═══ Secrets ═══');
-  const owner = await password({
-    message: 'Braiins Hashpower owner token:',
+  const apiVersion = await select<'v1' | 'v2'>({ message: 'Braiins Hashpower API version', choices: [
+    { name: 'v2 - Braiins ID API key', value: 'v2' }, { name: 'v1 - existing legacy tokens', value: 'v1' },
+  ] });
+  const credential = await password({
+    message: apiVersion === 'v2' ? 'Braiins ID API key (Viewer for monitoring, Admin for trading):' : 'Braiins Hashpower owner token:',
     mask: true,
-    validate: (v) => (v.trim().length > 0 ? true : 'required'),
+    validate: (v) => v.trim().length > 0 || 'required',
   });
-
-  const hasReader = await confirm({
-    message: 'Do you also have a read-only Braiins token?',
-    default: true,
+  const hasReader = apiVersion === 'v1' && await confirm({
+    message: 'Do you also have a read-only Braiins token?', default: true,
   });
-  const reader = hasReader
-    ? await password({ message: 'Braiins read-only token:', mask: true })
-    : undefined;
+  const reader = hasReader ? await password({ message: 'Braiins read-only token:', mask: true }) : undefined;
 
   const dashPass = await password({
     message: 'Password for the dashboard (minimum 8 characters):',
@@ -179,8 +179,13 @@ async function promptSecrets(): Promise<Secrets> {
   // only matter when the operator picks `bitcoind` as the payout source -
   // Electrs is the default and has its own host/port fields. Not prompted
   // here to keep the first-run wizard short.
+  const accountId = apiVersion === 'v2'
+    ? await createBraiinsClient({ apiVersion, apiKey: credential.trim() }).getAccountId!()
+    : undefined;
   const parsed = SecretsSchema.parse({
-    braiins_owner_token: owner,
+    ...(apiVersion === 'v2'
+      ? { braiins_api_version: 'v2', braiins_api_key: credential.trim(), braiins_account_id: accountId }
+      : { braiins_owner_token: credential.trim() }),
     ...(reader ? { braiins_read_only_token: reader } : {}),
     dashboard_password: dashPass,
   });

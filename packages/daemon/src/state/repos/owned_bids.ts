@@ -48,8 +48,8 @@ export interface ReconcilableBid {
   readonly price_sat: number;
   readonly amount_sat: number;
   readonly speed_limit_ph: number | null;
-  /** Currently consumed sat (= amount_sat − amount_remaining_sat). */
-  readonly amount_consumed_sat: number;
+  /** A missing v2 settlement sample leaves the previous ledger value intact. */
+  readonly amount_consumed_sat: number | null;
 }
 
 export class OwnedBidsRepo {
@@ -112,10 +112,21 @@ export class OwnedBidsRepo {
   }
 
   async markCancelled(braiinsOrderId: string, status = 'BID_STATUS_CANCELED'): Promise<void> {
-    await this.db
-      .updateTable('owned_bids')
-      .set({ last_known_status: status })
+    await this.db.updateTable('owned_bids').set({ last_known_status: status })
+      .where('braiins_order_id', '=', braiinsOrderId).execute();
+  }
+
+  async setKnownStatus(braiinsOrderId: string, status: string, settledSat?: number): Promise<void> {
+    const terminal = ['BID_STATUS_CANCELED', 'BID_STATUS_FULFILLED'];
+    const protectedStatuses = terminal.includes(status)
+      ? terminal.filter((existing) => existing !== status)
+      : status === 'BID_STATUS_PENDING_CANCEL' ? terminal : [...terminal, 'BID_STATUS_PENDING_CANCEL'];
+    // A delayed write confirmation or detail GET must not resurrect a bid
+    // that another observer has already seen canceling or settled.
+    await this.db.updateTable('owned_bids')
+      .set({ last_known_status: status, ...(settledSat !== undefined && { amount_consumed_sat: settledSat }) })
       .where('braiins_order_id', '=', braiinsOrderId)
+      .where((eb) => eb.or([eb('last_known_status', 'is', null), eb('last_known_status', 'not in', protectedStatuses)]))
       .execute();
   }
 
@@ -163,21 +174,31 @@ export class OwnedBidsRepo {
    * Does NOT insert unknown bids - ownership is a client-side decision that
    * happens only on our own POST.
    */
-  async reconcileFromApi(now: number, bids: readonly ReconcilableBid[]): Promise<void> {
+  async reconcileFromApi(now: number, bids: readonly ReconcilableBid[], preserveV2Disposition = false): Promise<void> {
     for (const b of bids) {
       await this.db
         .updateTable('owned_bids')
         .set((eb) => ({
-          last_known_status: b.status,
+          // A dashboard cancel may finish while this tick's stale list is in flight.
+          last_known_status: preserveV2Disposition
+            ? sql<string>`CASE
+                WHEN last_known_status IN ('BID_STATUS_CANCELED','BID_STATUS_FULFILLED') THEN last_known_status
+                WHEN last_known_status = 'BID_STATUS_PENDING_CANCEL'
+                  AND ${b.status} NOT IN ('BID_STATUS_CANCELED','BID_STATUS_FULFILLED') THEN last_known_status
+                ELSE ${b.status} END`
+            : b.status,
           price_sat: b.price_sat,
           amount_sat: b.amount_sat,
           speed_limit_ph: b.speed_limit_ph,
-          // Monotonic: never roll the persisted consumed value
-          // backwards. Braiins's `amount_remaining_sat` can wobble by
-          // a few sat between polls (counters_estimate vs
-          // counters_committed), so always keep the highest seen
-          // value to avoid spurious dips on the finance panel.
-          amount_consumed_sat: sql<number>`MAX(amount_consumed_sat, ${b.amount_consumed_sat})`,
+          // v1 consumption is a noisy remaining-budget estimate. v2 settled
+          // spend is authoritative, even when correcting a legacy estimate.
+          // A delayed current-list sample cannot replace a final settlement.
+          ...(b.amount_consumed_sat !== null && {
+            amount_consumed_sat: preserveV2Disposition
+              ? sql<number>`CASE WHEN last_known_status IN ('BID_STATUS_CANCELED','BID_STATUS_FULFILLED')
+                  THEN amount_consumed_sat ELSE ${b.amount_consumed_sat} END`
+              : sql<number>`MAX(amount_consumed_sat, ${b.amount_consumed_sat})`,
+          }),
           first_seen_active_at:
             b.status === 'BID_STATUS_ACTIVE'
               ? eb.fn.coalesce('first_seen_active_at', eb.val(now))

@@ -32,7 +32,10 @@ issue #60.
 
 | Env var | Schema field | Notes |
 |---|---|---|
-| `BHA_BRAIINS_OWNER_TOKEN` | `braiins_owner_token` | Required. |
+| `BHA_BRAIINS_API_VERSION` | `braiins_api_version` | Select `v2` for a Braiins ID key. Existing configurations without a version use `v1`. |
+| `BHA_BRAIINS_API_KEY` | `braiins_api_key` | Required for v2. Created in Braiins ID for a single Hashpower account. |
+| `BHA_BRAIINS_ACCOUNT_ID` | `braiins_account_id` | Optional expected v2 account ID. Autopilot verifies and pins the account returned by Braiins. |
+| `BHA_BRAIINS_OWNER_TOKEN` | `braiins_owner_token` | Required for v1. |
 | `BHA_BRAIINS_READ_ONLY_TOKEN` | `braiins_read_only_token` | Optional. |
 | `BHA_DASHBOARD_PASSWORD` | `dashboard_password` | Required. Basic Auth password for the dashboard. |
 | `BHA_BITCOIND_RPC_URL` | `bitcoind_rpc_url` | Optional. Editable from the Config page. |
@@ -40,10 +43,24 @@ issue #60.
 | `BHA_BITCOIND_RPC_PASSWORD` | `bitcoind_rpc_password` | Optional. |
 | `BHA_TELEGRAM_BOT_TOKEN` | `telegram_bot_token` | Active (#100). Dual-location: also a live-editable config field; the env var seeds both. |
 
+### Braiins Hashpower API version
+
+1. In Braiins ID, open **Accounts**, select the Hashpower account and create an API key. Choose **Viewer** for monitoring or **Admin** to allow trading. Use the same account for an existing installation so its bids and spending history can be reconciled. [Account API keys](https://academy.braiins.com/braiins-id/api-keys)
+2. On a fresh install, enter your Braiins ID API key. **Verify connection** is an optional read-only check. It shows the account name or ID. You can also continue directly and let Autopilot validate the key when you save. To reinstall with a legacy token, select **Use an existing legacy token (v1)** and enter the owner token.
+3. Before migrating an existing installation, select DRY-RUN and let any pending bid change finish. Then follow the steps for the source shown under **Config → Security & credentials**.
+   - For **dashboard-managed credentials**, choose **Migrate to Braiins ID**. Enter the expected account ID, candidate key and current dashboard password. Autopilot checks the account against saved history. When Config confirms the credentials are saved, restart the daemon to activate v2.
+   - For **SOPS or environment variables**, stop the daemon. Set the API version to `v2`, the new key and the expected account ID in the source that supplies each field, then start the daemon. Config lists any Braiins environment variables that override SOPS or the database.
+4. On the first successful v2 boot, Autopilot binds the database to the verified account and enters DRY-RUN, including installations configured to start in LIVE. Under **Status**, review the balance and owned bids and explicitly enable LIVE when ready. A read-access check cannot establish permission to trade.
+5. To rotate a key, create a replacement on the same account. Choose **Rotate API key** in Config or update the managed secret source, then restart. Rotation remains available to dashboard-managed installations while LIVE confirmation is pending. A database bound to v2 requires a key for that account on subsequent boots. Use separate state databases for different accounts.
+
+Autopilot records each v2 bid change before sending it. If the exchange times out, a retry uses the original request ID and payload. When Braiins rate-limits every attempt, Autopilot waits for the reset before acting on its next decision. Cancellation can remain pending until Braiins reports a final state and releases the unused funds. If placement remains uncertain, Autopilot holds further placement. Check the current **and historical** bids on Braiins for the unique memo and matching terms. Under **Config → Security & credentials**, enter the confirmed bid ID to restore tracking. If Braiins independently confirms it never placed the bid, pause Autopilot and enter the confirmation reference there. A missing bid on the first page does not establish that placement failed. [Braiins retry and settlement rules](https://academy.braiins.com/braiins-hashpower/api#retrying-without-acting-twice)
+
+Braiins stopped issuing v1 tokens on November 11, 2026 and plans to switch off v1 at the end of 2026. An ordinary upgrade retains the existing v1 configuration until the operator selects v2. [Official API and migration reference](https://academy.braiins.com/braiins-hashpower/api#migrating-from-v1)
+
 ### Secrets at rest and in the API (#331)
 
 Secrets that live in the database are **AES-256-GCM encrypted at rest**
-(Braiins owner + read-only tokens, `bitcoind_rpc_password`,
+(Braiins ID keys and legacy tokens, `bitcoind_rpc_password`,
 `telegram_bot_token`, `ddns_credential`), and the dashboard password is
 stored as a one-way **scrypt** hash. The encryption key is resolved
 `BHA_SECRET_KEY` env > `BHA_SECRET_KEY_FILE` > a generated `secret.key`
@@ -67,11 +84,10 @@ source of truth.
 On database-sourced installs (the appliance / Umbrel path, where there is
 no shell or SOPS), Config -> Pool & Payout -> **Security & credentials**
 lets you change the dashboard password (applied immediately) and rotate
-the Braiins owner and read-only tokens (validated against Braiins before
+the Braiins ID key or legacy tokens (validated against Braiins before
 saving; applied on the next daemon restart), each gated on your current
-password. On env- or SOPS-sourced installs that section is read-only and
-points you back to this file, since a database write would be overwritten
-on the next boot. See [`credential-rotation.md`](credential-rotation.md).
+password. For environment- or SOPS-managed Braiins credentials, the section
+shows which source to edit. [Credential rotation design](credential-rotation.md)
 
 ## Targets and pricing
 

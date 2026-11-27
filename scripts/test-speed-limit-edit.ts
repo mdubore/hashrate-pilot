@@ -42,6 +42,9 @@ async function main() {
     env: { ...process.env, SOPS_AGE_KEY_FILE: ageKeyPath },
   });
 
+  if (secrets.braiins_api_version === 'v2' || !secrets.braiins_owner_token) {
+    throw new Error('This diagnostic requires a configuration using the legacy Braiins v1 API.');
+  }
   const owner = createBraiinsClient({ ownerToken: secrets.braiins_owner_token });
 
   console.log('\n→ GET /spot/bid/current');

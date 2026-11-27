@@ -11,7 +11,7 @@
  * present and no env-var-based bootstrap supplied complete secrets.
  */
 
-import type { Kysely } from 'kysely';
+import { type Kysely, sql } from 'kysely';
 
 import { SecretsSchema, type Secrets } from '../../config/schema.js';
 import { hashPassword, isPasswordHashed } from '../../config/password-hash.js';
@@ -48,12 +48,16 @@ export class SecretsRepo {
     const dec = (field: string, v: string | null): string | null =>
       v == null || v === '' ? null : this.crypto ? this.crypto.decrypt(field, v) : v;
     const owner = dec('braiins_owner_token', row.braiins_owner_token);
-    if (owner == null) return null;
+    const key = dec('braiins_api_key', row.braiins_api_key);
+    if (row.braiins_api_version === 'v2' ? !key : !owner) return null;
     // Drop columns that aren't part of SecretsSchema; pass the rest
     // through Zod so a row hand-edited to be invalid surfaces a clear
     // schema error rather than silently flowing into the daemon.
     const candidate: Record<string, string | undefined> = {
-      braiins_owner_token: owner,
+      ...(owner ? { braiins_owner_token: owner } : {}),
+      ...(key ? { braiins_api_key: key } : {}),
+      ...(row.braiins_account_id ? { braiins_account_id: row.braiins_account_id } : {}),
+      ...(row.braiins_api_version === 'v2' ? { braiins_api_version: 'v2' } : {}),
       dashboard_password: row.dashboard_password,
     };
     const reader = dec('braiins_read_only_token', row.braiins_read_only_token);
@@ -84,7 +88,10 @@ export class SecretsRepo {
     const enc = (field: string, v: string | null | undefined): string | null =>
       v == null || v === '' ? (v ?? null) : this.crypto ? this.crypto.encrypt(field, v) : v;
     const row = {
-      braiins_owner_token: enc('braiins_owner_token', validated.braiins_owner_token)!,
+      braiins_api_version: validated.braiins_api_version ?? 'v1' as const,
+      braiins_account_id: validated.braiins_account_id ?? null,
+      braiins_api_key: enc('braiins_api_key', validated.braiins_api_key),
+      braiins_owner_token: enc('braiins_owner_token', validated.braiins_owner_token),
       braiins_read_only_token: enc('braiins_read_only_token', validated.braiins_read_only_token),
       dashboard_password: storedPassword,
       bitcoind_rpc_url: validated.bitcoind_rpc_url ?? null,
@@ -152,6 +159,63 @@ export class SecretsRepo {
       .where('id', '=', 1)
       .execute();
     return hash;
+  }
+
+  async getBraiinsSettings() {
+    return this.db.selectFrom('secrets').select(['braiins_api_version', 'braiins_account_id'])
+      .where('id', '=', 1).executeTakeFirst();
+  }
+
+  async getAccountBinding() {
+    return this.db.selectFrom('braiins_account_binding').selectAll().where('id', '=', 1).executeTakeFirst();
+  }
+
+  async getAccountWitness() {
+    const rows = await this.db.selectFrom('owned_bids').select('braiins_order_id')
+      .union(this.db.selectFrom('closed_bids_cache').select('braiins_order_id')).execute();
+    if (rows.length) return { bidIds: rows.map(row => row.braiins_order_id) };
+    const deposit = await this.db.selectFrom('braiins_deposits').select(['tx_id', 'address', 'amount_sat'])
+      .orderBy(sql<number>`CASE WHEN address IS NULL OR address = '' THEN 1 ELSE 0 END`)
+      .orderBy('first_seen_at_ms', 'desc').limit(1).executeTakeFirst();
+    return deposit ? { deposit } : undefined;
+  }
+
+  async bindV2Account(accountId: string): Promise<boolean> {
+    // A conflicting credential must never replace the state DB's established account.
+    await this.db.insertInto('braiins_account_binding').values({ id: 1, account_id: accountId })
+      .onConflict((oc) => oc.column('id').doNothing()).execute();
+    const binding = await this.getAccountBinding();
+    if (binding?.account_id !== accountId) throw new Error('This state database belongs to a different Braiins account.');
+    return binding.needs_live_confirmation === 1;
+  }
+
+  async confirmLiveAccount(accountId: string): Promise<void> {
+    const result = await this.db.updateTable('braiins_account_binding')
+      .set({ needs_live_confirmation: 0 }).where('id', '=', 1).where('account_id', '=', accountId)
+      .executeTakeFirst();
+    if (!result.numUpdatedRows) throw new Error('The running key does not match the bound Braiins account.');
+  }
+
+  async saveV2Key(key: string, actualAccountId: string, expectedAccountId: string): Promise<void> {
+    if (actualAccountId !== expectedAccountId) throw new Error('The API key belongs to a different Braiins account.');
+    const encrypted = this.crypto ? this.crypto.encrypt('braiins_api_key', key) : key;
+    await this.db.transaction().execute(async (tx) => {
+      const binding = await tx.selectFrom('braiins_account_binding').select('account_id').executeTakeFirst();
+      const row = await tx.selectFrom('secrets').select(['braiins_api_version', 'braiins_account_id'])
+        .where('id', '=', 1).executeTakeFirst();
+      if (!row) throw new Error('There are no stored credentials to update.');
+      if ((binding && binding.account_id !== actualAccountId) ||
+          (row.braiins_account_id && row.braiins_account_id !== actualAccountId)) {
+        throw new Error('This state database belongs to a different Braiins account.');
+      }
+      if (row.braiins_api_version !== 'v2') {
+        const runtime = await tx.selectFrom('runtime_state').select('run_mode').where('id', '=', 1).executeTakeFirst();
+        if (runtime?.run_mode === 'LIVE') throw new Error('Select DRY-RUN or PAUSED before migrating.');
+      }
+      await tx.updateTable('secrets').set({
+        braiins_api_version: 'v2', braiins_api_key: encrypted, braiins_account_id: actualAccountId, updated_at: Date.now(),
+      }).where('id', '=', 1).execute();
+    });
   }
 
   async setBraiinsToken(

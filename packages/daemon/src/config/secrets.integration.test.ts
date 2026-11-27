@@ -33,7 +33,18 @@ function haveBinary(name: string): boolean {
 const needsTools = describe.skipIf(!haveBinary('sops') || !haveBinary('age-keygen'));
 
 needsTools('loadSecrets - sops+age round-trip', () => {
-  it('encrypts with age, decrypts via loadSecrets, yields the original payload', async () => {
+  it.each<{ version: string; secrets: Secrets }>([
+    { version: 'v1', secrets: SAMPLE },
+    {
+      version: 'v2',
+      secrets: {
+        braiins_api_version: 'v2',
+        braiins_api_key: 'synthetic-braiins-key',
+        braiins_account_id: 'synthetic-account',
+        dashboard_password: 'synthetic-password',
+      },
+    },
+  ])('round-trips $version credentials through age and loadSecrets', async ({ secrets }) => {
     const dir = await mkdtemp(join(tmpdir(), 'braiins-sops-e2e-'));
     const keyPath = join(dir, 'age.key');
     const policyPath = join(dir, '.sops.yaml');
@@ -56,7 +67,7 @@ needsTools('loadSecrets - sops+age round-trip', () => {
     await writeFile(policyPath, policy, 'utf8');
 
     // 3. Write plaintext YAML
-    await writeFile(secretsPath, stringifyYaml(SAMPLE), 'utf8');
+    await writeFile(secretsPath, stringifyYaml(secrets), 'utf8');
 
     // 4. Encrypt in place with sops
     const enc = spawnSync('sops', ['-e', '-i', secretsPath], {
@@ -69,7 +80,7 @@ needsTools('loadSecrets - sops+age round-trip', () => {
     // Sanity check: the file is now sops-encrypted
     const encryptedContent = await readFile(secretsPath, 'utf8');
     expect(encryptedContent).toMatch(/^sops:\s*$/m);
-    expect(encryptedContent).not.toContain('owner_xyz');
+    expect(encryptedContent).not.toContain(secrets.braiins_owner_token ?? secrets.braiins_api_key);
 
     // 5. Decrypt via loadSecrets
     const loaded = await loadSecrets(secretsPath, {
@@ -77,6 +88,6 @@ needsTools('loadSecrets - sops+age round-trip', () => {
     });
 
     // 6. Values round-trip
-    expect(loaded).toEqual(SAMPLE);
+    expect(loaded).toEqual(secrets);
   });
 });

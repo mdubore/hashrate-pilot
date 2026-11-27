@@ -25,6 +25,7 @@ import { BraiinsApiError, type BraiinsClient } from '@hashrate-autopilot/braiins
 
 import type { ConfigRepo } from '../../state/repos/config.js';
 import type { OwnedBidsRepo } from '../../state/repos/owned_bids.js';
+import type { V2BidMutations } from '../../services/v2-bid-mutations.js';
 import { parsePoolUrl } from '../../services/pool-health.js';
 
 /**
@@ -64,6 +65,8 @@ export interface StaleUrlsRouteDeps {
   readonly configRepo: ConfigRepo;
   readonly ownedBidsRepo: OwnedBidsRepo;
   readonly braiinsClient: BraiinsClient;
+  readonly v1MigrationGuard?: import('../../config/braiins.js').V1MigrationGuard;
+  readonly v2BidMutations?: V2BidMutations;
 }
 
 /**
@@ -159,7 +162,14 @@ export async function registerStaleUrlsRoute(
         return { ok: false, error: `bid is not active (status=${bid.last_known_status})` };
       }
 
+      let release: (() => void) | undefined;
       try {
+        if (deps.braiinsClient.apiVersion === 'v2') {
+          if (!deps.v2BidMutations) throw new Error('Braiins v2 mutation journal is unavailable.');
+          await deps.v2BidMutations.run({ kind: 'CANCEL_BID', braiins_order_id: bidId, reason: 'Operator canceled stale pool URL' });
+          return { ok: true };
+        }
+        release = deps.v1MigrationGuard?.beginWrite();
         await deps.braiinsClient.cancelBid({ order_id: bidId });
         await deps.ownedBidsRepo.markCancelled(bidId);
         return { ok: true };
@@ -172,6 +182,7 @@ export async function registerStaleUrlsRoute(
         // self-heal would catch this too, but handle it inline so the
         // button gives immediate, correct feedback.
         if (
+          deps.braiinsClient.apiVersion !== 'v2' &&
           err instanceof BraiinsApiError &&
           (err.status === 404 ||
             /not.?found|does not exist|no such|already (cancel|complet)/i.test(
@@ -183,6 +194,8 @@ export async function registerStaleUrlsRoute(
         }
         reply.status(502);
         return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      } finally {
+        release?.();
       }
     },
   );

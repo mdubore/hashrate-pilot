@@ -332,6 +332,10 @@ msgstr "de nuevo sobre el mínimo"
 msgid "Access"
 msgstr "Acceso"
 
+#: src/pages/Setup.tsx
+msgid "Account verification is temporarily unavailable. Try again."
+msgstr "La verificación de la cuenta no está disponible temporalmente. Vuelve a intentarlo."
+
 #. placeholder {0}: formatAge(firing.created_at)
 #: src/pages/Alerts.tsx
 msgid "acknowledged · {0}"
@@ -591,6 +595,10 @@ msgstr "automático"
 msgid "autopilot"
 msgstr "autopilot"
 
+#: src/components/BraiinsPendingPlacement.tsx
+msgid "Autopilot is holding new placements. Check current and historical bids on Braiins for this memo."
+msgstr "Autopilot ha suspendido las nuevas ofertas. Busca esta nota en las ofertas actuales y en el historial de Braiins."
+
 #: src/pages/Config.tsx
 msgid "Autopilot only (autopilot-tagged bids)"
 msgstr "Solo autopilot (ofertas etiquetadas por el autopilot)"
@@ -760,6 +768,10 @@ msgstr "Las acciones sobre ofertas siguen fallando"
 #: src/lib/alertConditions.ts
 msgid "bid actions working again"
 msgstr "acciones sobre ofertas funcionando de nuevo"
+
+#: src/pages/Config.tsx
+msgid "Bid changes are on hold until restart."
+msgstr "Los cambios en las pujas quedan en pausa hasta el reinicio."
 
 #: src/components/TilesBar.tsx
 msgid "bid coverage"
@@ -1101,9 +1113,9 @@ msgstr "Braiins (precio, efectivo)"
 msgid "Braiins 10-min cooldown"
 msgstr "Cooldown de 10 min de Braiins"
 
-#: src/pages/Setup.tsx
-msgid "Braiins API access"
-msgstr "Acceso a la API de Braiins"
+#: src/pages/Config.tsx
+msgid "Braiins account ID"
+msgstr "ID de cuenta de Braiins"
 
 #: src/pages/Status.tsx
 msgid "Braiins API unreachable - waiting for connectivity."
@@ -1116,6 +1128,18 @@ msgstr "API de Braiins no accesible durante"
 #: src/pages/Status.tsx
 msgid "Braiins balance"
 msgstr "saldo Braiins"
+
+#: src/components/BraiinsPendingPlacement.tsx
+msgid "Braiins bid ID"
+msgstr "ID de la oferta de Braiins"
+
+#: src/components/BraiinsPendingPlacement.tsx
+msgid "Braiins confirmation reference"
+msgstr "Referencia de confirmación de Braiins"
+
+#: src/components/BraiinsPendingPlacement.tsx
+msgid "Braiins confirmed the bid was never placed"
+msgstr "Braiins confirmó que la oferta nunca se realizó"
 
 #: src/pages/Config.tsx
 msgid "Braiins deposit"
@@ -1134,6 +1158,11 @@ msgid "Braiins fee above your threshold"
 msgstr "Comisión de Braiins por encima de tu umbral"
 
 #: src/pages/Config.tsx
+#: src/pages/Setup.tsx
+msgid "Braiins ID API key (v2)"
+msgstr "Clave de API de Braiins ID (v2)"
+
+#: src/pages/Config.tsx
 msgid "Braiins marketplace"
 msgstr "Marketplace de Braiins"
 
@@ -1144,6 +1173,10 @@ msgstr "API del marketplace de Braiins - accesible cuando el último observe() l
 #: src/pages/Config.tsx
 msgid "Braiins marketplace empty for"
 msgstr "Mercado Braiins vacío durante"
+
+#: src/pages/Setup.tsx
+msgid "Braiins rejected this key. Use a key with Hashpower read access."
+msgstr "Braiins ha rechazado esta clave. Usa una clave con acceso de lectura a Hashpower."
 
 #: src/pages/Config.tsx
 msgid "Braiins rejected this token."
@@ -1268,8 +1301,8 @@ msgid "Change password"
 msgstr "Cambiar contraseña"
 
 #: src/pages/Config.tsx
-msgid "Change your dashboard password and rotate your Braiins API tokens. Every change asks for your current password."
-msgstr "Cambia la contraseña de tu panel y rota tus tokens de API de Braiins. Cada cambio te pide tu contraseña actual."
+msgid "Change your dashboard password or Braiins credentials. Every change asks for your current password."
+msgstr "Cambia la contraseña del panel o las credenciales de Braiins. Cada cambio requiere la contraseña actual."
 
 #: src/components/Layout.tsx
 msgid "changelog"
@@ -1319,6 +1352,14 @@ msgstr "Ventana sostenida de modo barato"
 #: src/pages/Config.tsx
 msgid "Cheap-mode target"
 msgstr "Objetivo en modo barato"
+
+#: src/pages/Setup.tsx
+msgid "Check the selected account in Braiins ID."
+msgstr "Comprueba la cuenta seleccionada en Braiins ID."
+
+#: src/pages/Setup.tsx
+msgid "Checking account read access…"
+msgstr "Comprobando el acceso de lectura a la cuenta…"
 
 #: src/pages/Config.tsx
 msgid "Choose file…"
@@ -1444,6 +1485,22 @@ msgstr "Confirmar contraseña"
 msgid "confs"
 msgstr "confs"
 
+#: src/pages/Setup.tsx
+msgid "Connect to Braiins Hashpower"
+msgstr "Conectar con Braiins Hashpower"
+
+#: src/pages/Setup.tsx
+msgid "Connected to {account}. Account read access verified."
+msgstr "Conexión con {account} establecida. Se ha verificado el acceso de lectura a la cuenta."
+
+#: src/pages/Config.tsx
+msgid "Connected using a legacy token (v1)"
+msgstr "Conexión mediante un token anterior (v1)"
+
+#: src/pages/Config.tsx
+msgid "Connected using Braiins ID (v2)"
+msgstr "Conexión mediante Braiins ID (v2)"
+
 #: src/components/SetupGate.tsx
 msgid "Connecting to daemon…"
 msgstr "Conectando al daemon…"
@@ -1521,6 +1578,10 @@ msgstr "No se pudo cambiar la contraseña."
 msgid "Could not load security settings."
 msgstr "No se pudieron cargar los ajustes de seguridad."
 
+#: src/components/BraiinsPendingPlacement.tsx
+msgid "Could not resolve this placement."
+msgstr "No se pudo resolver esta oferta."
+
 #: src/components/BidEventDrawer.tsx
 #: src/components/PriceChart.tsx
 #: src/pages/Config.tsx
@@ -1532,6 +1593,10 @@ msgstr "crear"
 #: src/components/PriceChart.tsx
 msgid "CREATE"
 msgstr "CREATE"
+
+#: src/pages/Setup.tsx
+msgid "Create a key under Accounts → API Keys in Braiins ID. Viewer can monitor an account. Admin can also place, change and cancel bids."
+msgstr "Crea una clave en Accounts → API Keys en Braiins ID. Viewer permite supervisar una cuenta. Admin también permite realizar, modificar y cancelar pujas."
 
 #: src/pages/Status.tsx
 msgid "Create bid"
@@ -2078,6 +2143,10 @@ msgstr "Activar todos los filtros (todos los grupos)"
 msgid "Ended (estimated)"
 msgstr "Finalizado (estimado)"
 
+#: src/pages/Setup.tsx
+msgid "Enter a Braiins ID API key."
+msgstr "Introduce una clave de API de Braiins ID."
+
 #: src/components/Bip110ScanCard.tsx
 msgid "Epoch"
 msgstr "Época"
@@ -2314,6 +2383,10 @@ msgstr "encontrado por nosotros"
 msgid "FOUND BY US"
 msgstr "ENCONTRADO POR NOSOTROS"
 
+#: src/components/BraiinsPendingPlacement.tsx
+msgid "Found the matching bid"
+msgstr "Encontré la oferta correspondiente"
+
 #: src/pages/History.tsx
 msgid "From"
 msgstr "Desde"
@@ -2321,10 +2394,6 @@ msgstr "Desde"
 #: src/pages/History.tsx
 msgid "From date"
 msgstr "Fecha desde"
-
-#: src/pages/Setup.tsx
-msgid "From hashpower.braiins.com → API tokens. Required."
-msgstr "De hashpower.braiins.com → API tokens. Obligatorio."
 
 #: src/lib/labels.ts
 msgid "Frozen"
@@ -2385,6 +2454,10 @@ msgstr "¿Restablecer por completo los datos de Ganancias y Pérdidas? Esto ELIM
 #: src/pages/Status.tsx
 msgid "Hard reset: delete the stored payout history + spend cache and rebuild both from scratch. Use only if 'rebuild' didn't fix it."
 msgstr "Reinicio total: borra el historial de pagos + la caché de gasto almacenados y reconstruye ambos desde cero. Úsalo solo si 'rebuild' no lo solucionó."
+
+#: src/pages/Setup.tsx
+msgid "Hashpower API version"
+msgstr "Versión de la API de Hashpower"
 
 #: src/components/BidEventDrawer.tsx
 #: src/components/PriceChart.tsx
@@ -2795,6 +2868,10 @@ msgstr "suerte antes"
 msgid "Mainstream chain (default)"
 msgstr "Cadena principal (predeterminada)"
 
+#: src/pages/Config.tsx
+msgid "Manage credentials in the service environment and restart the daemon after changes."
+msgstr "Gestiona las credenciales en el entorno del servicio y reinicia el demonio tras modificarlas."
+
 #: src/components/BidEventDrawer.tsx
 #: src/components/PriceChart.tsx
 msgid "manual"
@@ -2917,6 +2994,10 @@ msgstr "Golpe metálico 1"
 msgid "Metallic clank 2"
 msgstr "Golpe metálico 2"
 
+#: src/pages/Config.tsx
+msgid "Migrate to Braiins ID"
+msgstr "Migrar a Braiins ID"
+
 #: src/components/Bip110ScanCard.tsx
 msgid "miner"
 msgstr "minero"
@@ -3037,6 +3118,10 @@ msgstr "Tasa de equilibrio de la red a la dificultad y recompensa de bloque actu
 #: src/pages/History.tsx
 msgid "new"
 msgstr "nuevo"
+
+#: src/pages/Config.tsx
+msgid "New API key"
+msgstr "Nueva clave de API"
 
 #: src/components/HashrateChart.tsx
 msgid "new difficulty"
@@ -3462,6 +3547,10 @@ msgid "open in explorer"
 msgstr "abrir en el explorador"
 
 #: src/pages/Config.tsx
+msgid "Open Status to review and change run mode."
+msgstr "Abre Estado para revisar y cambiar el modo de funcionamiento."
+
+#: src/pages/Config.tsx
 msgid "Open Telegram and chat with <0>@BotFather</0>, send /newbot, follow the prompts; @BotFather replies with the token. Paste it here."
 msgstr "Abre Telegram y conversa con <0>@BotFather</0>, envía /newbot y sigue los pasos; @BotFather responde con el token. Pégalo aquí."
 
@@ -3501,13 +3590,13 @@ msgstr "Endpoint de diagnostico opcional. Cuando esta activado, GET /api/debug/d
 msgid "Optional dynamic ceiling. On each tick the effective cap = min(Maximum, hashprice + this). Stops the autopilot from wildly overpaying when hashprice drops sharply and the fixed Maximum alone would still allow it. Set to 0 to disable."
 msgstr "Tope dinámico opcional. En cada tick el tope efectivo = min(Máximo, hashprice + este valor). Evita que el autopilot pague descontroladamente cuando el hashprice cae bruscamente y el Máximo fijo aún lo permitiría. Pon 0 para desactivar."
 
+#: src/pages/Setup.tsx
+msgid "Optional here. Completing setup checks your key again."
+msgstr "Esta comprobación es opcional. Al finalizar la configuración se volverá a verificar la clave."
+
 #: src/pages/Config.tsx
 msgid "Optional. The HTTP API exposed by Datum Gateway - e.g. http://192.168.1.121:7152. Leave empty to disable; the Datum panel will show \"not configured\"."
 msgstr "Opcional. La API HTTP expuesta por Datum Gateway - p. ej. http://192.168.1.121:7152. Déjalo vacío para desactivar; el panel Datum mostrará \"no configurado\"."
-
-#: src/pages/Setup.tsx
-msgid "Optional. Useful if you'd like a second token only for read paths."
-msgstr "Opcional. Útil si quieres un segundo token solo para lectura."
 
 #: src/pages/Config.tsx
 msgid "Optional. When set, every Telegram message from this daemon is prefixed with `[label] ` so you can tell which instance fired the alert if you run more than one daemon against the same bot/chat. Leave empty to send messages without a prefix."
@@ -3627,6 +3716,10 @@ msgstr "La paciencia se libera en"
 #: src/pages/Status.tsx
 msgid "Pause"
 msgstr "Pausar"
+
+#: src/components/BraiinsPendingPlacement.tsx
+msgid "Pause Autopilot and obtain independent confirmation from Braiins. An empty order list alone is insufficient."
+msgstr "Pausa Autopilot y solicita confirmación independiente a Braiins. Una lista de órdenes vacía por sí sola es insuficiente."
 
 #: src/pages/History.tsx
 #: src/pages/Status.tsx
@@ -4018,6 +4111,10 @@ msgstr "Lee el host y el puerto en la propia página de conexión de tu servidor
 msgid "Read-only token"
 msgstr "Token de solo lectura"
 
+#: src/pages/Setup.tsx
+msgid "Read-only token (optional)"
+msgstr "Token de solo lectura (opcional)"
+
 #: src/components/Layout.tsx
 msgid "Rearrange"
 msgstr "Reorganizar"
@@ -4067,6 +4164,10 @@ msgstr "¿Recalcular el panel de Profit & Loss desde cero? Vuelve a paginar cada
 #: src/pages/Status.tsx
 msgid "Recompute the Profit & Loss panel from scratch? Re-paginates every bid from Braiins (spent) and re-scans your payout address history via your Bitcoin node (collected). Safe, just slower than a normal refresh."
 msgstr "¿Recalcular el panel de Ganancias y Pérdidas desde cero? Vuelve a paginar cada puja desde Braiins (gastado) y vuelve a escanear el historial de tu dirección de pago a través de tu nodo Bitcoin (cobrado). Seguro, solo más lento que un refresco normal."
+
+#: src/components/BraiinsPendingPlacement.tsx
+msgid "Record confirmed non-placement"
+msgstr "Registrar que la oferta nunca se realizó"
 
 #: src/lib/alertConditions.ts
 msgid "recovered"
@@ -4202,6 +4303,10 @@ msgstr "Se reanuda en el próximo tick"
 msgid "resuming…"
 msgstr "reanudando…"
 
+#: src/pages/Setup.tsx
+msgid "Retry"
+msgstr "Reintentar"
+
 #: src/pages/Config.tsx
 msgid "Retry interval"
 msgstr "Intervalo de reintento"
@@ -4217,6 +4322,10 @@ msgstr "revertir"
 #: src/pages/Setup.tsx
 msgid "Review"
 msgstr "Revisar"
+
+#: src/pages/Config.tsx
+msgid "Review your balance and owned bids before enabling LIVE."
+msgstr "Revisa tu saldo y tus pujas antes de activar LIVE."
 
 #: src/components/Bip110ScanCard.tsx
 msgid "reward"
@@ -4241,6 +4350,10 @@ msgstr "Ventana de media móvil para las líneas `our bid` y `effective` del gr�
 #: src/pages/Config.tsx
 msgid "Rolling-window rejection ratio above which the alert fires. Default 10 %."
 msgstr "Ratio de rechazo en la ventana movil por encima del cual se dispara la alerta. Por defecto 10 %."
+
+#: src/pages/Config.tsx
+msgid "Rotate API key"
+msgstr "Rotar la clave de API"
 
 #: src/pages/Config.tsx
 msgid "Rotate Braiins owner token"
@@ -4310,6 +4423,10 @@ msgstr "Sats acumulados en nuestra cartera en Ocean desde el último pago on-cha
 #: src/pages/Config.tsx
 msgid "save"
 msgstr "guardar"
+
+#: src/pages/Config.tsx
+msgid "Save API key"
+msgstr "Guardar clave de API"
 
 #: src/pages/Config.tsx
 msgid "save failed:"
@@ -4407,6 +4524,10 @@ msgstr "seleccionar todo"
 #: src/components/Layout.tsx
 msgid "Select display currency"
 msgstr "Elige moneda de visualización"
+
+#: src/pages/Config.tsx
+msgid "Select DRY-RUN on Status and wait for any bid change to finish. Saving prepares the verified key for restart. The first successful v2 startup permanently binds this database to the verified Braiins account."
+msgstr "Selecciona DRY-RUN en Estado y espera a que termine cualquier cambio de puja en curso. Al guardar, la clave verificada queda preparada para el reinicio. El primer inicio correcto con v2 vincula permanentemente esta base de datos a la cuenta de Braiins verificada."
 
 #: src/components/Layout.tsx
 msgid "Select hashrate unit (1 EH = 1,000 PH = 1,000,000 TH)"
@@ -4737,6 +4858,10 @@ msgid "The daemon may not be in setup mode. Reload the page or check the daemon 
 msgstr "El daemon puede no estar en modo setup. Recarga la página o revisa los logs del daemon."
 
 #: src/pages/Config.tsx
+msgid "The daemon validates the new token with Braiins and applies it after restart."
+msgstr "El servicio valida el nuevo token con Braiins y lo aplica al reiniciarse."
+
+#: src/pages/Config.tsx
 msgid "The hostname being maintained. For No-IP DDNS Key groups (the modern auth flow that doesn't expose your account password), use the special hostname all.ddnskey.com - that updates every hostname assigned to the DDNS Key's group in one call. Test connection pushes a real update with the values currently in the form (without saving). `nochg` and `good` are both success."
 msgstr "El hostname que se mantiene. Para grupos de DDNS Key de No-IP (el flujo moderno que no expone la contraseña de tu cuenta), usa el hostname especial all.ddnskey.com - actualiza cada hostname asignado al grupo del DDNS Key en una sola llamada. Test connection envía una actualización real con los valores del formulario (sin guardar). `nochg` y `good` son ambos éxito."
 
@@ -4751,10 +4876,6 @@ msgstr "El marketplace rechazó todas las acciones sobre ofertas que el autopilo
 #: src/pages/Config.tsx
 msgid "The new password and its confirmation don't match."
 msgstr "La nueva contraseña y su confirmación no coinciden."
-
-#: src/pages/Config.tsx
-msgid "The new token is tested against Braiins before it's saved, so a typo can't disable order authorization. It takes effect after the daemon restarts."
-msgstr "El nuevo token se prueba contra Braiins antes de guardarse, para que un error tipográfico no pueda desactivar la autorización de órdenes. Tiene efecto después de reiniciar el daemon."
 
 #: src/pages/Status.tsx
 msgid "The part of collected that settled on-chain (has a transaction on the blockchain)."
@@ -4772,6 +4893,10 @@ msgstr "El precio que publicaría el controlador (ask disponible + overpay) como
 #: src/pages/Config.tsx
 msgid "The provider's dyndns2-compatible update endpoint. Examples: Dynu uses https://api.dynu.com/nic/update; FreeDNS / afraid.org uses https://freedns.afraid.org/nic/update; many self-hosted DDNS scripts speak the same protocol."
 msgstr "El endpoint de actualización compatible con dyndns2 del proveedor. Ejemplos: Dynu usa https://api.dynu.com/nic/update; FreeDNS / afraid.org usa https://freedns.afraid.org/nic/update; muchos scripts DDNS auto-alojados hablan el mismo protocolo."
+
+#: src/pages/Config.tsx
+msgid "The remaining credentials come from the database. Remove the Braiins environment overrides and restart to edit Braiins credentials here."
+msgstr "Las demás credenciales proceden de la base de datos. Elimina las variables de entorno que sustituyen la configuración de Braiins y reinicia el servicio para editar aquí las credenciales de Braiins."
 
 #: src/pages/Config.tsx
 msgid "Thousands and decimal separators."
@@ -4940,8 +5065,20 @@ msgid "unsupported provider"
 msgstr "proveedor no soportado"
 
 #: src/pages/Config.tsx
+msgid "Update <0>{overrides}</0> in the service environment."
+msgstr "Actualiza <0>{overrides}</0> en el entorno del servicio."
+
+#: src/pages/Config.tsx
+msgid "Update the remaining credentials in your SOPS secrets file and restart the daemon."
+msgstr "Actualiza las demás credenciales en tu archivo de secretos SOPS y reinicia el demonio."
+
+#: src/pages/Config.tsx
 msgid "Update URL"
 msgstr "URL de actualización"
+
+#: src/pages/Config.tsx
+msgid "Update your credentials in the SOPS secrets file and restart the daemon."
+msgstr "Actualiza tus credenciales en el archivo de secretos SOPS y reinicia el demonio."
 
 #: src/pages/Config.tsx
 msgid "updated"
@@ -4974,6 +5111,18 @@ msgstr "Tiempo activo"
 msgid "USD unavailable: BTC/USD oracle is not responding right now. Check Config → Pool & Payout → BTC Price Oracle (use the Test connection button)."
 msgstr "USD no disponible: el oráculo BTC/USD no responde ahora mismo. Revisa Config → Pool & Payout → BTC Price Oracle (usa el botón Test connection)."
 
+#: src/pages/Setup.tsx
+msgid "Use a Braiins ID API key (v2)"
+msgstr "Usar una clave de API de Braiins ID (v2)"
+
+#: src/pages/Config.tsx
+msgid "Use a new key for the same Braiins account. Restart the daemon to apply the verified key."
+msgstr "Usa una clave nueva de la misma cuenta de Braiins. Reinicia el demonio para aplicar la clave verificada."
+
+#: src/pages/Setup.tsx
+msgid "Use an existing legacy token (v1)"
+msgstr "Usar un token anterior existente (v1)"
+
 #: src/pages/Config.tsx
 msgid "Used by the on-chain payout balance check (when \"Bitcoin Knots RPC\" is selected as the backend above), AND by the <0>BIP 110</0> yellow-cube marker on the Hashrate chart and the BIP 110 scan card on Status - those last two call bitcoind regardless of which payout backend is selected. The Test button below validates the values currently in the form, before saving."
 msgstr "Usado por la comprobación de saldo de pagos on-chain (cuando \"Bitcoin Knots RPC\" está seleccionado como backend arriba), Y por el marcador de cubo amarillo <0>BIP 110</0> en el gráfico de Hashrate y la tarjeta de escaneo BIP 110 en Status - estos dos últimos llaman a bitcoind sin importar qué backend de pagos esté seleccionado. El botón Probar de abajo valida los valores actualmente en el formulario, antes de guardar."
@@ -5003,8 +5152,32 @@ msgid "v{__APP_VERSION__} · build {__BUILD_NUMBER__} · {__BUILD_HASH__}"
 msgstr "v{__APP_VERSION__} · build {__BUILD_NUMBER__} · {__BUILD_HASH__}"
 
 #: src/pages/Config.tsx
+msgid "v1 is active. Restart to activate v2."
+msgstr "v1 está activa. Reinicia para activar v2."
+
+#: src/pages/Config.tsx
 msgid "Validating…"
 msgstr "Validando…"
+
+#: src/components/BraiinsPendingPlacement.tsx
+msgid "Verification result"
+msgstr "Resultado de la verificación"
+
+#: src/pages/Config.tsx
+msgid "Verify and save"
+msgstr "Verificar y guardar"
+
+#: src/components/BraiinsPendingPlacement.tsx
+msgid "Verify bid and restore tracking"
+msgstr "Verificar la oferta y reanudar el seguimiento"
+
+#: src/pages/Setup.tsx
+msgid "Verify connection"
+msgstr "Verificar la conexión"
+
+#: src/components/BraiinsPendingPlacement.tsx
+msgid "Verify pending Braiins placement"
+msgstr "Verificar la oferta pendiente en Braiins"
 
 #: src/pages/History.tsx
 msgid "View details"
@@ -5183,14 +5356,6 @@ msgstr "tu nodo Bitcoin no registra BIP 110 como una softfork con nombre"
 #: src/components/Bip110ScanCard.tsx
 msgid "Your Bitcoin node supports BIP 110, which is currently in its activation window. There are two paths it can activate by:"
 msgstr "Tu nodo Bitcoin admite BIP 110, que actualmente está en su ventana de activación. Hay dos caminos por los que puede activarse:"
-
-#: src/pages/Config.tsx
-msgid "Your credentials come from environment variables, not the database. Change them where they're defined and restart the daemon. The in-app editors are disabled here so a change couldn't be silently overwritten on the next boot."
-msgstr "Tus credenciales provienen de variables de entorno, no de la base de datos. Cámbialas donde estén definidas y reinicia el daemon. Los editores en la app están desactivados aquí para que un cambio no se sobrescriba silenciosamente en el próximo arranque."
-
-#: src/pages/Config.tsx
-msgid "Your credentials come from your SOPS secrets file, not the database. Change them with your SOPS tooling and restart the daemon. The in-app editors are disabled here so a change couldn't be silently overwritten on the next boot."
-msgstr "Tus credenciales provienen de tu archivo de secretos SOPS, no de la base de datos. Cámbialas con tu herramienta SOPS y reinicia el daemon. Los editores en la app están desactivados aquí para que un cambio no se sobrescriba silenciosamente en el próximo arranque."
 
 #: src/pages/Status.tsx
 msgid "Your layout is saved on this device."

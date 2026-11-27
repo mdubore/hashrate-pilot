@@ -1,26 +1,27 @@
 /**
- * Braiins Hashpower API client - thin typed wrapper over the generated
- * OpenAPI types. See SPEC §13 and RESEARCH.md §2.
- *
- * Exposes the GET subset used for observation (M1) plus POST/PUT/DELETE
- * for bid mutations (M4). Mutations require an owner token; GETs on
- * account-scoped data require at least a read-only token.
- *
- * Retry policy:
- *   - 429 Too Many Requests - retried with exponential backoff (safe; the
- *     rate limiter rejects before any server-side commit).
- *   - 5xx - retried on GETs and DELETEs (idempotent). Not retried on
- *     POST/PUT, to avoid double-committing a mutation whose outcome is
- *     unknown.
- *   - SPEC §6.1: a 2FA-confirmation timeout is a controller-level state
- *     transition, not a retry condition; we surface the 4xx unchanged.
+ * Shared Braiins spot-market client. Existing callers default to the v1
+ * adapter below. Selecting v2 uses the account-scoped Braiins ID adapter.
+ * The v2 daemon journals bid changes and reuses their UUIDs on retry.
  */
 
 import createOpenApiFetchClient from 'openapi-fetch';
 
 import { type AuthRole, type BraiinsTokens, selectToken } from './auth.js';
 import { BraiinsApiError, BraiinsNetworkError, readGrpcMessage } from './errors.js';
+import { createV2Client } from './v2-client.js';
 import type { components, paths } from './generated/types.js';
+import type {
+  AccountBalances,
+  BidDeliveryHistory,
+  BidDetail,
+  BidsResponse,
+  FeeSchedule,
+  MarketSettings,
+  MarketStats,
+  OnChainTransactionsResponse,
+  OrderbookSnapshot,
+  TransactionsResponse,
+} from './read-types.js';
 
 interface RawResult {
   data?: unknown;
@@ -29,7 +30,7 @@ interface RawResult {
 }
 
 /**
- * Production base URL for the Braiins Hashpower API.
+ * Production base URL for the legacy Braiins Hashpower API.
  *
  * Note: this deviates from the `servers:` block in the OpenAPI spec
  * (`https://hashpower.braiins.com/api/v1`), which 404s in production.
@@ -39,6 +40,9 @@ interface RawResult {
 export const BRAIINS_BASE_URL = 'https://hashpower.braiins.com/v1';
 
 export interface BraiinsClientConfig extends BraiinsTokens {
+  readonly apiVersion?: 'v1' | 'v2';
+  readonly apiKey?: string;
+  readonly accountId?: string;
   readonly baseUrl?: string;
   readonly fetch?: typeof fetch;
   /** Max retry attempts for transient failures (429, 5xx when safe). Default 3. */
@@ -47,36 +51,49 @@ export interface BraiinsClientConfig extends BraiinsTokens {
   readonly sleep?: (ms: number) => Promise<void>;
 }
 
-// Pull response body types out of the generated paths map for a clean public
-// surface. If the generated shape changes these aliases surface that early.
-export type MarketStats = components['schemas']['SpotGetMarketStatsResponse'];
-export type MarketSettings = components['schemas']['MarketSettings'];
-export type FeeSchedule = components['schemas']['GetFeeStructureResponse'];
-export type OrderbookSnapshot = components['schemas']['SpotGetOrderBookResponse'];
-export type AccountBalance = components['schemas']['AccountBalance'];
-export type AccountBalances = components['schemas']['GetAccountBalancesResponse'];
-export type BidsResponse = components['schemas']['SpotGetBidsResponse'];
-export type TransactionsResponse = components['schemas']['GetTransactionsResponse'];
-export type Transaction = components['schemas']['Transaction'];
-export type OnChainTransactionsResponse = components['schemas']['GetOnChainTransactionsResponse'];
-export type OnChainTransaction = components['schemas']['OnChainTransaction'];
-export type OnChainTransactionType = components['schemas']['OnChainTransactionType'];
-export type DepositStatus = components['schemas']['DepositStatus'];
-export type BidItem = components['schemas']['SpotGetBidsResponseItem'];
-export type BidDetail = components['schemas']['SpotGetBidDetailResponse'];
-export type BidDeliveryHistory = components['schemas']['SpotGetBidDeliveryHistoryResponse'];
-export type BidDeliveryHistoryItem = components['schemas']['SpotBidDeliveryHistoryItem'];
+export type {
+  AccountBalance,
+  AccountBalances,
+  BidDeliveryHistory,
+  BidDeliveryHistoryItem,
+  BidDetail,
+  BidItem,
+  BidsResponse,
+  DepositStatus,
+  FeeSchedule,
+  MarketSettings,
+  MarketStats,
+  OnChainTransaction,
+  OnChainTransactionType,
+  OnChainTransactionsResponse,
+  OrderbookSnapshot,
+  Transaction,
+  TransactionsResponse,
+} from './read-types.js';
+
 export type PlaceBidRequest = components['schemas']['SpotPlaceBidRequest'];
-export type PlaceBidResponse = components['schemas']['PlaceOrderResponse'];
+export interface BidConfirmation {
+  bidState: string;
+  settledAmountSat?: number;
+}
+export type PlaceBidResponse = { id: string; cl_order_id?: string } & Partial<BidConfirmation>;
 export type EditBidRequest = components['schemas']['SpotEditBidRequest'];
-export type CancelResponse = components['schemas']['CancelResponse'];
+export type CancelResponse = components['schemas']['CancelResponse'] & Partial<BidConfirmation>;
 
 export interface CancelBidParams {
   readonly order_id?: string;
   readonly cl_order_id?: string;
 }
 
+export interface AccountInfo {
+  readonly account_id: string;
+  readonly display_name?: string;
+}
+
 export interface BraiinsClient {
+  readonly apiVersion?: 'v1' | 'v2';
+  getAccountInfo?(): Promise<AccountInfo>;
+  getAccountId?(): Promise<string>;
   getStats(): Promise<MarketStats>;
   getOrderbook(): Promise<OrderbookSnapshot>;
   getSettings(): Promise<MarketSettings>;
@@ -86,13 +103,14 @@ export interface BraiinsClient {
   /**
    * List the user's bids - historical + active - with pagination.
    *
-   * Mirrors the OpenAPI `GET /spot/bid` endpoint. `limit` is capped at
+   * v2 returns a cursor for the next page. For the v1 endpoint, `limit` is capped at
    * 1000 by the server; default 200 to stay polite. Default order is
    * descending by creation time; set `reverse: true` for ascending.
    */
   listBids(opts?: {
     limit?: number;
     offset?: number;
+    page_token?: string;
     reverse?: boolean;
     exclude_active?: boolean;
   }): Promise<BidsResponse>;
@@ -100,18 +118,30 @@ export interface BraiinsClient {
   getOnChainTransactions(opts?: { limit?: number }): Promise<OnChainTransactionsResponse>;
   getBidDetail(orderId: string): Promise<BidDetail>;
   /**
-   * Bid delivery history (#90): per-tick records of shares purchased
-   * (Braiins-validated), accepted (pool-credited), and rejected.
-   * Used by the daemon to track Ocean acceptance ratio for the
-   * Status-page stat card + threshold alert.
+   * Bid delivery history (#90). v1 returns share counts. v2 returns
+   * sampled hashrates and omits the cumulative counters.
    */
   getBidDeliveryHistory(orderId: string): Promise<BidDeliveryHistory>;
-  placeBid(request: PlaceBidRequest): Promise<PlaceBidResponse>;
-  editBid(request: EditBidRequest): Promise<void>;
-  cancelBid(params: CancelBidParams): Promise<CancelResponse>;
+  /** Absolute epoch milliseconds for the last safe automatic v2 transmission. */
+  placeBid(
+    request: PlaceBidRequest,
+    requestId?: string,
+    deadlineMs?: number,
+  ): Promise<PlaceBidResponse>;
+  editBid(
+    request: EditBidRequest,
+    requestId?: string,
+    deadlineMs?: number,
+  ): Promise<void | BidConfirmation>;
+  cancelBid(
+    params: CancelBidParams,
+    requestId?: string,
+    deadlineMs?: number,
+  ): Promise<CancelResponse>;
 }
 
 export function createBraiinsClient(config: BraiinsClientConfig = {}): BraiinsClient {
+  if (config.apiVersion === 'v2') return createV2Client(config);
   const baseUrl = config.baseUrl ?? BRAIINS_BASE_URL;
   const maxRetries = config.maxRetries ?? 3;
   const sleep = config.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
@@ -151,7 +181,17 @@ export function createBraiinsClient(config: BraiinsClientConfig = {}): BraiinsCl
     try {
       return await fn();
     } catch (err) {
-      if (err instanceof BraiinsApiError) throw err;
+      if (err instanceof BraiinsApiError) {
+        if (err.status === 401 || err.status === 410) {
+          throw new BraiinsApiError({
+            ...err,
+            message:
+              err.message +
+              '. Check the legacy token or switch to Hashpower v2 with a Braiins ID API key.',
+          });
+        }
+        throw err;
+      }
       throw new BraiinsNetworkError(endpoint, err);
     }
   };
@@ -214,6 +254,7 @@ export function createBraiinsClient(config: BraiinsClientConfig = {}): BraiinsCl
     });
 
   return {
+    apiVersion: 'v1',
     getStats: () =>
       read('/spot/stats', async () => {
         const res = await api.GET('/spot/stats', { headers: authHeaders('PUBLIC') });
@@ -368,7 +409,9 @@ export function createBraiinsClient(config: BraiinsClientConfig = {}): BraiinsCl
             body: errBody,
           });
         }
-        const data = (await response.json().catch(() => ({ affected_ids: { id: [] } }))) as CancelResponse;
+        const data = (await response
+          .json()
+          .catch(() => ({ affected_ids: { id: [] } }))) as CancelResponse;
         return data;
       }),
   };

@@ -175,3 +175,13 @@ describe('computeBelowFloorSince - hysteresis', () => {
     expect(r).toEqual({ below_floor_since: 1_000, above_floor_ticks: 2 });
   });
 });
+
+it('captures settled v2 spend separately from the wallet estimate in each observed bid', async () => {
+  const { extractBids } = await import('./observe.js');
+  const row = {bid:{id:'B1',price_sat:30000,amount_sat:10000,status:'BID_STATUS_ACTIVE',is_current:true},
+    state_estimate:{avg_speed_ph:2,progress_pct:5,amount_remaining_sat:9500}};
+  const [settled, pending] = extractBids({items:[{...row,counters_committed:{amount_consumed_sat:250}},row]},'v2');
+  expect(settled).toMatchObject({amount_consumed_sat:250,amount_remaining_sat:9500});
+  expect(pending?.amount_consumed_sat).toBeNull();
+  expect(extractBids({items:[row]},'v1')[0]?.amount_consumed_sat).toBe(500);
+});

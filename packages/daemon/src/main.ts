@@ -16,6 +16,9 @@ import { resolve, dirname } from 'node:path';
 
 import { createBitcoindClient } from '@hashrate-autopilot/bitcoind-client';
 
+import { applyBootMode } from './config/boot-mode.js';
+import { prepareBraiinsAccount, V1MigrationGuard } from './config/braiins.js';
+import { V2BidMutations } from './services/v2-bid-mutations.js';
 import { ChainTipPoller } from './services/chain-tip-poller.js';
 import { BlockVersionService } from './services/block-version.js';
 import { BUILD } from './http/routes/build.js';
@@ -425,25 +428,8 @@ async function bootOperational(
   log(`config:   target=${cfg.target_hashrate_ph} PH/s  floor=${cfg.minimum_floor_hashrate_ph} PH/s`);
 
   await runtimeRepo.initializeIfMissing();
-  // boot_mode decides how run_mode is set at startup. LAST_MODE keeps whatever
-  // the operator last set, demoting PAUSED to DRY_RUN (we never auto-boot into
-  // PAUSED - that's only a reactive state).
-  const priorRuntime = await runtimeRepo.get();
-  const priorMode = priorRuntime?.run_mode ?? 'DRY_RUN';
-  let bootMode: 'DRY_RUN' | 'LIVE' | 'PAUSED';
-  switch (cfg.boot_mode) {
-    case 'ALWAYS_LIVE':
-      bootMode = 'LIVE';
-      break;
-    case 'LAST_MODE':
-      bootMode = priorMode === 'PAUSED' ? 'DRY_RUN' : priorMode;
-      break;
-    case 'ALWAYS_DRY_RUN':
-    default:
-      bootMode = 'DRY_RUN';
-      break;
-  }
-  await runtimeRepo.patch({ run_mode: bootMode });
+  const braiinsAccount = await prepareBraiinsAccount(deps.secretsRepo, secrets);
+  const { priorMode, bootMode } = await applyBootMode(runtimeRepo, cfg.boot_mode, braiinsAccount.requireDryRun);
   log(`run mode set to ${bootMode} on boot (boot_mode=${cfg.boot_mode}, was=${priorMode})`);
   // #287: surface boot-time mode transitions on the History page. Only
   // when the boot actually changed the mode - a LAST_MODE restart that
@@ -471,12 +457,12 @@ async function bootOperational(
     });
   }
 
-  const braiinsClient = createBraiinsClient({
-    ownerToken: secrets.braiins_owner_token,
-    ...(secrets.braiins_read_only_token
-      ? { readOnlyToken: secrets.braiins_read_only_token }
-      : {}),
-  });
+  const v1MigrationGuard = new V1MigrationGuard();
+  const braiinsClient = v1MigrationGuard.wrap(createBraiinsClient(braiinsAccount.clientConfig));
+  // Sync each committed v2 request ID to disk before the corresponding
+  // exchange operation can execute, including across a power failure.
+  if (braiinsClient.apiVersion === 'v2') handle.raw.pragma('synchronous = FULL');
+  const v2BidMutations = new V2BidMutations(handle.db, braiinsClient);
   const braiins = new BraiinsService({ client: braiinsClient });
   const poolTracker = new PoolHealthTracker();
 
@@ -724,6 +710,8 @@ async function bootOperational(
   const NODE_STALE_AFTER_MS = 30 * 60_000;
 
   const controller = new Controller({
+    v1MigrationGuard,
+    v2BidMutations,
     braiins,
     braiinsClient,
     poolTracker,
@@ -1221,6 +1209,8 @@ async function bootOperational(
 
   // HTTP server (dashboard API + static).
   const httpServer = await createHttpServer({
+    v1MigrationGuard,
+    v2BidMutations,
     controller,
     configRepo,
     runtimeRepo,

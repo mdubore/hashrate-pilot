@@ -15,7 +15,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "codegen": "openapi-typescript ./openapi.yml -o ./src/generated/types.ts"
+    "codegen": "openapi-typescript ./openapi.yml -o ./src/generated/types.ts",
+    "codegen:v2": "openapi-typescript ./openapi-v2.json -o ./src/generated/v2.ts"
   },
   "dependencies": {
     "@hashrate-autopilot/shared": "workspace:*",

@@ -112,3 +112,37 @@ describe('createBraiinsClient - error translation', () => {
     void BraiinsAuthMissingError; // keep the import used
   });
 });
+
+describe('legacy v1 migration compatibility', () => {
+  const order = { dest_upstream: { url: 'stratum+tcp://pool.example:3333', identity: 'test' }, amount_sat: 20000, price_sat: 400000 };
+
+  it('uses v1 by default and preserves the legacy edit and cancel wire formats', async () => {
+    const requests: Request[] = [];
+    const client = createBraiinsClient({ ownerToken: 'legacy-owner', fetch: async (input, init) => {
+      const r = new Request(input, init);
+      requests.push(r);
+      return r.method === 'PUT' ? new Response(null) : Response.json({ affected_ids: { id: ['B12'] } });
+    } });
+    await client.editBid({ bid_id: 'B12', new_speed_limit_ph: { value: 1 } });
+    await client.cancelBid({ order_id: 'B12' });
+    expect(requests.map(r => [r.url, r.method, r.headers.get('apikey'), r.headers.get('authorization')])).toEqual([
+      [BRAIINS_BASE_URL + '/spot/bid', 'PUT', 'legacy-owner', null],
+      [BRAIINS_BASE_URL + '/spot/bid', 'DELETE', 'legacy-owner', null],
+    ]);
+    expect(await requests[1]?.json()).toEqual({ order_id: 'B12' });
+  });
+
+  it('keeps v1 placement single-attempt after an ambiguous server error', async () => {
+    const fetch = vi.fn(async () => Response.json({}, { status: 503 }));
+    const client = createBraiinsClient({ ownerToken: 'legacy-owner', fetch });
+    await expect(client.placeBid(order)).rejects.toMatchObject({ status: 503 });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('points a legacy operator to v2 when the legacy credential stops working', async () => {
+    const fetch = vi.fn(async () => Response.json({}, { status: 401 }));
+    const client = createBraiinsClient({ ownerToken: 'legacy-owner', fetch });
+    await expect(client.getBalance()).rejects.toThrow(/v2.+Braiins ID/i);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+});

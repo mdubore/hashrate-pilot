@@ -20,7 +20,10 @@ import { z } from 'zod';
 const nonEmptyString = z.string().min(1, 'must be non-empty');
 
 export const SecretsSchema = z.object({
-  braiins_owner_token: nonEmptyString,
+  braiins_api_version: z.enum(['v1', 'v2']).optional(),
+  braiins_api_key: nonEmptyString.optional(),
+  braiins_account_id: nonEmptyString.optional(),
+  braiins_owner_token: nonEmptyString.optional(),
   braiins_read_only_token: nonEmptyString.optional(),
 
   // #100: Telegram bot token. Optional so installs without notifications
@@ -39,6 +42,13 @@ export const SecretsSchema = z.object({
   // Shared password for the dashboard (second-gate; Tailscale is the real
   // perimeter per architecture §12 risk register).
   dashboard_password: nonEmptyString,
+}).superRefine((values, ctx) => {
+  const field = values.braiins_api_version === 'v2' ? 'braiins_api_key' : 'braiins_owner_token';
+  if (values.braiins_api_version !== 'v2' &&
+      [values.braiins_owner_token, values.braiins_read_only_token].some(token => token?.startsWith('brn_key_'))) {
+    ctx.addIssue({ code: 'custom', path: ['braiins_api_version'], message: 'Select v2 for a Braiins ID API key.' });
+  }
+  if (!values[field]) ctx.addIssue({ code: 'custom', path: [field], message: 'required for the selected Braiins API version' });
 });
 
 export type Secrets = z.infer<typeof SecretsSchema>;

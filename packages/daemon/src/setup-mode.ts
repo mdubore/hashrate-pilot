@@ -7,6 +7,7 @@
  *   GET  /api/health        (no auth) → `{ status, mode: 'NEEDS_SETUP' }`
  *   GET  /api/setup-info    (no auth) → defaults + any pre-existing
  *                                       config to pre-fill the form
+ *   POST /api/setup/braiins/verify → read the candidate key's v2 account
  *   POST /api/setup         (no auth) → write config + secrets, hand
  *                                       off to operational boot
  *
@@ -35,6 +36,11 @@
 
 import fastifyCors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
+import {
+  BraiinsAccountSelectionError,
+  BraiinsApiError,
+  createBraiinsClient,
+} from '@hashrate-autopilot/braiins-client';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { readdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
@@ -52,6 +58,7 @@ import {
 } from './http/routes/config.js';
 import { sameOriginCorsDelegator } from './http/server.js';
 import type { ConfigRepo } from './state/repos/config.js';
+import { braiinsClientConfig, verifyV2Credentials } from './config/braiins.js';
 import type { SecretsRepo } from './state/repos/secrets.js';
 
 export interface SetupModeServerDeps {
@@ -77,6 +84,8 @@ const SetupRequestSchema = z.object({
   config: AppConfigInvariantsSchema,
   secrets: SecretsSchema,
 });
+
+const BraiinsPreviewSchema = z.strictObject({ api_key: z.string().trim().min(1) });
 
 export interface SetupModeServer {
   readonly app: FastifyInstance;
@@ -151,6 +160,34 @@ export async function createSetupModeServer(
     };
   });
 
+  app.post(
+    '/api/setup/braiins/verify',
+    {
+      // Invalid JSON can be rejected by Fastify before the handler sees the body.
+      errorHandler: (_error, _req, reply) => reply.code(400).send({ error: 'invalid_input' }),
+    },
+    async (req, reply) => {
+      const parsed = BraiinsPreviewSchema.safeParse(req.body);
+      if (!parsed.success) return reply.code(400).send({ error: 'invalid_input' });
+      const client = createBraiinsClient({
+        apiVersion: 'v2',
+        apiKey: parsed.data.api_key,
+        maxRetries: 1,
+      });
+      try {
+        return await client.getAccountInfo!();
+      } catch (err) {
+        if (err instanceof BraiinsApiError && (err.status === 401 || err.status === 403)) {
+          return reply.code(422).send({ error: 'credential_rejected' });
+        }
+        if (err instanceof BraiinsAccountSelectionError) {
+          return reply.code(422).send({ error: 'account_unavailable' });
+        }
+        return reply.code(503).send({ error: 'temporarily_unavailable' });
+      }
+    },
+  );
+
   app.post('/api/setup', async (req, reply) => {
     const parsed = SetupRequestSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -197,6 +234,15 @@ export async function createSetupModeServer(
     }
     const toSave = existing ? keepCredentials(config, existing) : config;
 
+    if (secrets.braiins_api_version === 'v2') {
+      try {
+        secrets.braiins_account_id = await verifyV2Credentials(deps.secretsRepo, braiinsClientConfig(secrets));
+      } catch {
+        return reply.code(422).send({ error: 'Could not verify the Braiins v2 key for this account and its saved bid history.' });
+      }
+    } else if (await deps.secretsRepo.getAccountBinding()) {
+      return reply.code(409).send({ error: 'This database belongs to a Braiins v2 account. Use a key for the same account.' });
+    }
     deps.log?.('setup: writing config + secrets to db');
     await deps.configRepo.upsert(toSave);
     await deps.secretsRepo.upsert(secrets);

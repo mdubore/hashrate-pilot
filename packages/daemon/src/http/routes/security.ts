@@ -16,12 +16,16 @@ import type { FastifyInstance } from 'fastify';
 
 import { createBraiinsClient } from '@hashrate-autopilot/braiins-client';
 
+import { type V1MigrationGuard, verifyV2Credentials } from '../../config/braiins.js';
+import { braiinsCredentialManagement } from '../../config/env-overrides.js';
 import { verifyPassword } from '../../config/password-hash.js';
 import type { SecretsRepo } from '../../state/repos/secrets.js';
 
 export interface SecurityRouteDeps {
   readonly secretsRepo: SecretsRepo;
   /** Where the running secrets came from - editing only makes sense for 'db'. */
+  readonly braiinsVersion?: 'v1' | 'v2';
+  readonly v1MigrationGuard?: V1MigrationGuard;
   readonly secretSource: 'env' | 'sops' | 'db';
   /** Current stored dashboard password (hash or plaintext) for verification. */
   readonly getCurrentPassword: () => string;
@@ -32,16 +36,30 @@ export interface SecurityRouteDeps {
 
 const MIN_PASSWORD_LEN = 8;
 
+class CandidateKeyError extends Error {}
+
 export async function registerSecurityRoutes(
   app: FastifyInstance,
   deps: SecurityRouteDeps,
 ): Promise<void> {
   const editable = deps.secretSource === 'db';
 
-  app.get('/api/security/state', async () => ({
-    secret_source: deps.secretSource,
-    editable,
-  }));
+  const management = braiinsCredentialManagement(deps.secretSource, process.env);
+  const activeVersion = deps.braiinsVersion ?? 'v1';
+  app.get('/api/security/state', async () => {
+    const saved = editable ? await deps.secretsRepo.getBraiinsSettings() : undefined;
+    const binding = activeVersion === 'v2' ? await deps.secretsRepo.getAccountBinding() : undefined;
+    return {
+      secret_source: deps.secretSource,
+      editable,
+      braiins_editable: management.editable,
+      braiins_env_override_names: management.overrideNames,
+      braiins_needs_live_confirmation: binding?.needs_live_confirmation === 1,
+      braiins_active_api_version: activeVersion,
+      braiins_api_version: saved?.braiins_api_version ?? activeVersion,
+      braiins_account_id: saved?.braiins_account_id ?? null,
+    };
+  });
 
   app.post<{ Body: { current_password?: string; new_password?: string } }>(
     '/api/security/password',
@@ -74,24 +92,54 @@ export async function registerSecurityRoutes(
   );
 
   app.post<{
-    Body: { kind?: 'owner' | 'read_only'; current_password?: string; token?: string };
+    Body: { kind?: 'owner' | 'read_only' | 'v2'; current_password?: string; token?: string; account_id?: string };
   }>('/api/security/braiins-token', async (req, reply) => {
-    if (!editable) {
+    if (!management.editable) {
       reply.code(409);
       return { error: 'managed_externally', secret_source: deps.secretSource };
     }
-    const { kind = 'owner', current_password = '', token = '' } = req.body ?? {};
-    if (kind !== 'owner' && kind !== 'read_only') {
+    const { kind = 'owner', current_password = '', token = '', account_id = '' } = req.body ?? {};
+    if (kind !== 'owner' && kind !== 'read_only' && kind !== 'v2') {
       reply.code(422);
-      return { error: 'kind must be "owner" or "read_only"' };
+      return { error: 'Unknown Braiins credential type' };
     }
     if (!verifyPassword(current_password, deps.getCurrentPassword())) {
       reply.code(403);
       return { error: 'current password is incorrect' };
     }
-    if (token.trim().length === 0) {
+    if (typeof token !== 'string' || token.trim().length === 0) {
       reply.code(422);
       return { error: 'token is required' };
+    }
+    if (kind === 'v2') {
+      if (typeof account_id !== 'string' || !account_id.trim()) {
+        return reply.code(422).send({ error: 'Enter the account ID shown in Braiins ID.' });
+      }
+      const verifyAndSave = async () => {
+        let actual: string;
+        try {
+          actual = await verifyV2Credentials(deps.secretsRepo, {
+            apiVersion: 'v2', apiKey: token.trim(), accountId: account_id.trim(),
+          });
+        } catch {
+          throw new CandidateKeyError('Could not verify the API key for this account and its saved bid or deposit history.');
+        }
+        await deps.secretsRepo.saveV2Key(token.trim(), actual, account_id.trim());
+      };
+      try {
+        if (deps.braiinsVersion !== 'v2' && deps.v1MigrationGuard) {
+          await deps.v1MigrationGuard.migrate(verifyAndSave);
+        } else {
+          await verifyAndSave();
+        }
+      } catch (err) {
+        return reply.code(err instanceof CandidateKeyError ? 422 : 409).send({ error: (err as Error).message });
+      }
+      return { ok: true, applies_on_restart: true };
+    }
+    const saved = await deps.secretsRepo.getBraiinsSettings();
+    if (saved?.braiins_api_version === 'v2' || token.startsWith('brn_key_')) {
+      return reply.code(422).send({ error: 'Select the Braiins ID API key editor for v2 credentials.' });
     }
     // Validate against Braiins before committing - a typo/wrong token
     // would otherwise silently break bidding. Build a throwaway client

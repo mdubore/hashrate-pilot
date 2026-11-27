@@ -1,20 +1,19 @@
 #!/usr/bin/env bash
-#
-# Refresh the pinned Braiins Hashpower OpenAPI spec and regenerate the
-# TypeScript types. Inspect `git diff` afterwards to catch breaking changes.
-#
-# Usage:  scripts/regen-openapi-types.sh
-#
+# Refresh one Hashpower API schema and its generated TypeScript definitions.
+# Usage: scripts/regen-openapi-types.sh [v1|v2]
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SPEC_URL="https://hashpower.braiins.com/api/openapi.yml"
-SPEC_PATH="$ROOT/packages/braiins-client/openapi.yml"
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$repo_root/packages/braiins-client"
+case "${1:-v1}" in
+  v1) remote_spec=v1.yml; local_spec=openapi.yml; generator=codegen ;;
+  v2) remote_spec=v2.json; local_spec=openapi-v2.json; generator=codegen:v2 ;;
+  *) echo "usage: $0 [v1|v2]" >&2; exit 2 ;;
+esac
 
-echo "→ fetching $SPEC_URL"
-curl -sfL --max-time 30 -o "$SPEC_PATH" "$SPEC_URL"
-
-echo "→ regenerating types"
-pnpm --filter @hashrate-autopilot/braiins-client run codegen
-
-echo "→ done. git diff to review API shape changes."
+download="$(mktemp)"
+trap 'rm -f "$download"' EXIT
+curl --fail --silent --show-error --location --max-time 30 \
+  "https://hashpower.braiins.com/api/openapi/$remote_spec" --output "$download"
+cp "$download" "$local_spec"
+pnpm run "$generator"

@@ -71,6 +71,13 @@ export class Controller {
   }
 
   async tick(): Promise<TickResult> {
+    if (this.deps.braiinsClient.apiVersion === 'v2' && this.deps.v2BidMutations) {
+      try {
+        await this.deps.v2BidMutations.reconcile();
+      } catch (err) {
+        console.warn(`[tick] pending Braiins bid change: ${(err as Error).message}`);
+      }
+    }
     let state = await observe(this.deps, {
       previousBelowFloorSince: this.belowFloorSince,
       previousAboveFloorTicks: this.aboveFloorTicks,
@@ -85,43 +92,43 @@ export class Controller {
     const gated = gate(proposals, state);
     const executed = await execute(this.deps, state, gated);
 
-    // observe() ran *before* execute(), so `state.owned_bids` still
-    // reflects the pre-execute world. Patch it in-memory so anything
-    // downstream this tick (metrics row, lastResult consumed by
-    // /api/status) sees the post-execute reality.
-    const patchedOwnedBids = state.owned_bids
-      .map((b) => {
-        let next = b;
-        const priceEdit = executed.find(
-          (e) =>
-            e.outcome === 'EXECUTED' &&
-            e.proposal.kind === 'EDIT_PRICE' &&
-            e.proposal.braiins_order_id === b.braiins_order_id,
-        );
-        if (priceEdit && priceEdit.proposal.kind === 'EDIT_PRICE') {
-          next = { ...next, price_sat: priceEdit.proposal.new_price_sat };
-        }
-        const speedEdit = executed.find(
-          (e) =>
-            e.outcome === 'EXECUTED' &&
-            e.proposal.kind === 'EDIT_SPEED' &&
-            e.proposal.braiins_order_id === b.braiins_order_id,
-        );
-        if (speedEdit && speedEdit.proposal.kind === 'EDIT_SPEED') {
-          next = { ...next, speed_limit_ph: speedEdit.proposal.new_speed_limit_ph };
-        }
-        return next;
-      })
-      .filter(
-        (b) =>
-          !executed.some(
+    // v1 edits and cancellations take effect immediately. v2 can acknowledge
+    // either before completion, so metrics and status retain observed terms.
+    if (this.deps.braiinsClient.apiVersion !== 'v2') {
+      const patchedOwnedBids = state.owned_bids
+        .map((b) => {
+          let next = b;
+          const priceEdit = executed.find(
             (e) =>
               e.outcome === 'EXECUTED' &&
-              e.proposal.kind === 'CANCEL_BID' &&
+              e.proposal.kind === 'EDIT_PRICE' &&
               e.proposal.braiins_order_id === b.braiins_order_id,
-          ),
-      );
-    state = { ...state, owned_bids: patchedOwnedBids };
+          );
+          if (priceEdit && priceEdit.proposal.kind === 'EDIT_PRICE') {
+            next = { ...next, price_sat: priceEdit.proposal.new_price_sat };
+          }
+          const speedEdit = executed.find(
+            (e) =>
+              e.outcome === 'EXECUTED' &&
+              e.proposal.kind === 'EDIT_SPEED' &&
+              e.proposal.braiins_order_id === b.braiins_order_id,
+          );
+          if (speedEdit && speedEdit.proposal.kind === 'EDIT_SPEED') {
+            next = { ...next, speed_limit_ph: speedEdit.proposal.new_speed_limit_ph };
+          }
+          return next;
+        })
+        .filter(
+          (b) =>
+            !executed.some(
+              (e) =>
+                e.outcome === 'EXECUTED' &&
+                e.proposal.kind === 'CANCEL_BID' &&
+                e.proposal.braiins_order_id === b.braiins_order_id,
+            ),
+        );
+      state = { ...state, owned_bids: patchedOwnedBids };
+    }
 
     // #287: detect Braiins-side pause/resume on the primary bid and
     // log it to bid_events for the History page. The alert pipeline

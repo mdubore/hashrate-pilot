@@ -3,8 +3,8 @@
  *
  * Resolution priority on boot:
  *
- * 1. **Pure environment variables** (`BHA_BRAIINS_OWNER_TOKEN` +
- *    `BHA_DASHBOARD_PASSWORD` set, plus any optional fields). Lets a
+ * 1. **Pure environment variables** (dashboard password plus the selected
+ *    marketplace credentials: legacy owner token, or v2 API version and key). Lets a
  *    Docker / Umbrel / Start9 deployment skip both the SOPS file and
  *    the wizard entirely - declare creds in the manifest, done.
  *

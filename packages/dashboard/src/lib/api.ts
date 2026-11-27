@@ -814,7 +814,9 @@ export interface SetupInfoResponse {
 export interface SetupRequestPayload {
   config: AppConfig;
   secrets: {
-    braiins_owner_token: string;
+    braiins_api_version?: 'v1' | 'v2';
+    braiins_api_key?: string;
+    braiins_owner_token?: string;
     braiins_read_only_token?: string;
     dashboard_password: string;
     bitcoind_rpc_url?: string;
@@ -836,12 +838,16 @@ async function publicGet<T>(path: string): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-async function publicPost<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(path, {
+function publicPostResponse(path: string, body: unknown): Promise<Response> {
+  return fetch(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify(body),
   });
+}
+
+async function publicPost<T>(path: string, body: unknown): Promise<T> {
+  const res = await publicPostResponse(path, body);
   const text = await res.text();
   if (!res.ok) {
     throw new Error(`${res.status} ${res.statusText}${text ? ` - ${text}` : ''}`);
@@ -849,9 +855,43 @@ async function publicPost<T>(path: string, body: unknown): Promise<T> {
   return JSON.parse(text) as T;
 }
 
+export type BraiinsConnectionResult =
+  | { account_id: string; display_name?: string }
+  | { error: 'invalid_input' | 'credential_rejected' | 'account_unavailable' | 'temporarily_unavailable' };
+
+async function verifyBraiinsConnection(apiKey: string): Promise<BraiinsConnectionResult> {
+  try {
+    const response = await publicPostResponse('/api/setup/braiins/verify', { api_key: apiKey.trim() });
+    const data = await response.json() as { account_id?: unknown; display_name?: unknown; error?: unknown } | null;
+    if (response.status === 200 && typeof data?.account_id === 'string' && data.account_id.trim()) {
+      const displayName = typeof data.display_name === 'string' ? data.display_name.trim() : '';
+      return displayName ? { account_id: data.account_id, display_name: displayName } : { account_id: data.account_id };
+    }
+    if (response.status === 400 && data?.error === 'invalid_input') return { error: data.error };
+    if (response.status === 422 && (data?.error === 'credential_rejected' || data?.error === 'account_unavailable')) {
+      return { error: data.error };
+    }
+  } catch {
+    // A network failure or unreadable response can be retried with the same input.
+  }
+  return { error: 'temporarily_unavailable' };
+}
+
+type PendingBraiinsCommand =
+  | { kind: 'place'; body: { memo: string } }
+  | { kind: 'cancel' | 'speed' | 'price'; bid: string };
+
 export const api = {
+  pendingBraiinsMutation: () => request<{ pending: {
+    request_id: string; created_at: number; needs_review: boolean; command: PendingBraiinsCommand;
+  } | null }>('/api/braiins/pending-mutation'),
+  resolveBraiinsPlacement: (request_id: string, bid_id: string) =>
+    securityPost('/api/braiins/pending-mutation/resolve-placement', { request_id, bid_id }),
+  confirmBraiinsNonPlacement: (request_id: string, confirmation_reference: string) =>
+    securityPost('/api/braiins/pending-mutation/confirm-not-placed', { request_id, confirmation_reference }),
   health: () => publicGet<HealthResponse>('/api/health'),
   setupInfo: () => publicGet<SetupInfoResponse>('/api/setup-info'),
+  verifyBraiinsConnection,
   submitSetup: (payload: SetupRequestPayload) =>
     publicPost<SetupResponse>('/api/setup', payload),
   status: () => request<StatusResponse>('/api/status'),
@@ -868,11 +908,21 @@ export const api = {
   // (not `request`) so a 403 "wrong current password" surfaces its error
   // message instead of being swallowed into the session-logout path.
   securityState: () =>
-    request<{ secret_source: 'env' | 'sops' | 'db'; editable: boolean }>('/api/security/state'),
+    request<{
+      secret_source: 'env' | 'sops' | 'db';
+      editable: boolean;
+      braiins_editable: boolean;
+      braiins_env_override_names: string[];
+      braiins_needs_live_confirmation: boolean;
+      braiins_active_api_version: 'v1' | 'v2';
+      braiins_api_version: 'v1' | 'v2';
+      braiins_account_id: string | null;
+    }>('/api/security/state'),
   changePassword: (body: { current_password: string; new_password: string }) =>
     securityPost('/api/security/password', body),
   rotateBraiinsToken: (body: {
-    kind: 'owner' | 'read_only';
+    kind: 'owner' | 'read_only' | 'v2';
+    account_id?: string;
     current_password: string;
     token: string;
   }) => securityPost('/api/security/braiins-token', body),

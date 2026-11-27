@@ -3,6 +3,8 @@
 Status: **implemented** on `develop` (#331). Phases: (1A) dashboard password hashed, (1B) credentials write-only in the API, (2) field encryption + layered key resolution. Migrations are boot-time TS steps (they need the key), not SQL.
 Context: security advisory GHSA-wvpp-w528-9p8x ("Sensitive credentials are stored in plaintext in the app SQLite database"). Related: GHSA-x8x9-3m72-9w8w (config-change audit log leaked credentials - already fixed, migration 0117).
 
+Braiins v2 stores the account API key in the encrypted `secrets.braiins_api_key` column. The dashboard accepts the key through setup or credential rotation and never returns its value.
+
 ## 1. What secrets exist, and where they live today
 
 | Secret | Stored in | Recoverable needed at runtime? | Returned by API today? |

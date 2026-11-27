@@ -15,11 +15,11 @@ import { isValidBtcPayoutAddress } from '@hashrate-autopilot/shared';
 import { Trans } from '@lingui/react/macro';
 import { t } from '@lingui/core/macro';
 import { useLingui } from '@lingui/react';
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
 
 import { LanguagePicker } from '../components/LanguagePicker';
-import { api, type AppConfig, type SetupInfoResponse } from '../lib/api';
+import { api, type AppConfig, type BraiinsConnectionResult, type SetupInfoResponse } from '../lib/api';
 import { formatNumber } from '../lib/format';
 import { useLocale } from '../lib/locale';
 import { setPassword } from '../lib/auth';
@@ -28,6 +28,8 @@ const SAT_PER_EH_PER_PH = 1000;
 
 interface FormState {
   // Secrets
+  braiins_api_version: 'v1' | 'v2';
+  braiins_api_key: string;
   braiins_owner_token: string;
   braiins_read_only_token: string;
   dashboard_password: string;
@@ -74,6 +76,8 @@ export function Setup() {
         setInfo(i);
         const base: AppConfig = i.current_config ?? i.defaults;
         setForm({
+          braiins_api_version: 'v2',
+          braiins_api_key: '',
           braiins_owner_token: '',
           braiins_read_only_token: '',
           dashboard_password: '',
@@ -167,10 +171,12 @@ export function Setup() {
       await api.submitSetup({
         config,
         secrets: {
-          braiins_owner_token: form.braiins_owner_token,
-          ...(form.braiins_read_only_token
-            ? { braiins_read_only_token: form.braiins_read_only_token }
-            : {}),
+          ...(form.braiins_api_version === 'v2'
+            ? { braiins_api_version: 'v2' as const, braiins_api_key: form.braiins_api_key.trim() }
+            : {
+                braiins_owner_token: form.braiins_owner_token.trim(),
+                ...(form.braiins_read_only_token.trim() ? { braiins_read_only_token: form.braiins_read_only_token.trim() } : {}),
+              }),
           dashboard_password: form.dashboard_password,
           ...(form.payout_source === 'bitcoind' && form.bitcoind_rpc_url
             ? {
@@ -316,7 +322,7 @@ function AccessStep({
   void i18n;
   const passwordsMatch = form.dashboard_password === form.dashboard_password_confirm;
   const valid =
-    form.braiins_owner_token.trim().length > 0 &&
+    (form.braiins_api_version === 'v2' ? form.braiins_api_key : form.braiins_owner_token).trim().length > 0 &&
     form.dashboard_password.length >= 8 &&
     passwordsMatch;
   return (
@@ -327,43 +333,55 @@ function AccessStep({
       }}
       className="space-y-4"
     >
-      <Section title={t`Braiins API access`}>
-        <Field label={t`Owner token`} hint={t`From hashpower.braiins.com → API tokens. Required.`}>
-          <PasswordField
-            value={form.braiins_owner_token}
-            onChange={(v) => update('braiins_owner_token', v)}
-            autoFocus
-          />
-        </Field>
-        <Field
-          label={t`Read-only token`}
-          hint={t`Optional. Useful if you'd like a second token only for read paths.`}
+      <Section title={t`Connect to Braiins Hashpower`}>
+        {form.braiins_api_version === 'v2' && (
+          <BraiinsKeyField value={form.braiins_api_key} onChange={(v) => update('braiins_api_key', v)} />
+        )}
+        <button
+          type="button"
+          aria-expanded={form.braiins_api_version === 'v1'}
+          aria-controls="legacy-credentials"
+          onClick={() => update('braiins_api_version', form.braiins_api_version === 'v2' ? 'v1' : 'v2')}
+          className="text-sm text-amber-400 underline"
         >
-          <PasswordField
-            value={form.braiins_read_only_token}
-            onChange={(v) => update('braiins_read_only_token', v)}
-          />
-        </Field>
+          {form.braiins_api_version === 'v1'
+            ? <Trans>Use a Braiins ID API key (v2)</Trans>
+            : <Trans>Use an existing legacy token (v1)</Trans>}
+        </button>
+        <div id="legacy-credentials" hidden={form.braiins_api_version !== 'v1'} className="space-y-3">
+          {form.braiins_api_version === 'v1' && (
+            <>
+              <PasswordField
+                label={t`Owner token`}
+                value={form.braiins_owner_token}
+                onChange={(v) => update('braiins_owner_token', v)}
+              />
+              <PasswordField
+                label={t`Read-only token (optional)`}
+                value={form.braiins_read_only_token}
+                onChange={(v) => update('braiins_read_only_token', v)}
+              />
+            </>
+          )}
+        </div>
       </Section>
       <Section title={t`Dashboard password`}>
         <p className="text-xs text-slate-400 -mt-1">
           <Trans>You'll use this to sign in to the dashboard after setup. At least 8 characters.</Trans>
         </p>
-        <Field label={t`Password`}>
-          <PasswordField
-            value={form.dashboard_password}
-            onChange={(v) => update('dashboard_password', v)}
-          />
-        </Field>
-        <Field label={t`Confirm password`}>
-          <PasswordField
-            value={form.dashboard_password_confirm}
-            onChange={(v) => update('dashboard_password_confirm', v)}
-          />
-          {!passwordsMatch && form.dashboard_password_confirm.length > 0 && (
-            <div className="text-xs text-red-400 mt-1"><Trans>passwords don't match</Trans></div>
-          )}
-        </Field>
+        <PasswordField
+          label={t`Password`}
+          value={form.dashboard_password}
+          onChange={(v) => update('dashboard_password', v)}
+        />
+        <PasswordField
+          label={t`Confirm password`}
+          value={form.dashboard_password_confirm}
+          onChange={(v) => update('dashboard_password_confirm', v)}
+        />
+        {!passwordsMatch && form.dashboard_password_confirm.length > 0 && (
+          <div className="text-xs text-red-400 mt-1"><Trans>passwords don't match</Trans></div>
+        )}
       </Section>
       <div className="flex justify-end pt-2">
         <button
@@ -375,6 +393,59 @@ function AccessStep({
         </button>
       </div>
     </form>
+  );
+}
+
+function BraiinsKeyField({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  const keyInput = useRef<HTMLInputElement>(null);
+  const generation = useRef(0);
+  const [result, setResult] = useState<BraiinsConnectionResult | 'pending' | null>(null);
+  // Switching protocol or leaving Access unmounts this field, even when the operator
+  // later returns to the same key. Only its latest request may update the screen.
+  useEffect(() => () => { generation.current++; }, []);
+
+  const verify = async () => {
+    const request = ++generation.current;
+    setResult('pending');
+    const reply = await api.verifyBraiinsConnection(value);
+    if (request !== generation.current) return;
+    setResult(reply);
+    if ('error' in reply && reply.error === 'invalid_input') keyInput.current?.focus();
+  };
+
+  const error = result && result !== 'pending' && 'error' in result ? result.error : null;
+  const account = result && result !== 'pending' && 'account_id' in result
+    ? result.display_name ?? result.account_id : null;
+  return (
+    <div className="space-y-2">
+      <PasswordField
+        inputRef={keyInput}
+        label={t`Braiins ID API key (v2)`}
+        hint={t`Create a key under Accounts → API Keys in Braiins ID. Viewer can monitor an account. Admin can also place, change and cancel bids.`}
+        value={value}
+        onChange={(next) => {
+          generation.current++;
+          setResult(null);
+          onChange(next);
+        }}
+      />
+      <div className="flex flex-wrap items-center gap-2">
+        <button type="button" disabled={result === 'pending'} onClick={verify} className={secondaryButtonCss}>
+          {error === 'temporarily_unavailable' ? <Trans>Retry</Trans> : <Trans>Verify connection</Trans>}
+        </button>
+        <span className="text-xs text-slate-400">
+          <Trans>Optional here. Completing setup checks your key again.</Trans>
+        </span>
+      </div>
+      <div role="status" className="text-sm text-slate-300">
+        {result === 'pending' && <Trans>Checking account read access…</Trans>}
+        {account && <Trans>Connected to {account}. Account read access verified.</Trans>}
+        {error === 'invalid_input' && <Trans>Enter a Braiins ID API key.</Trans>}
+        {error === 'credential_rejected' && <Trans>Braiins rejected this key. Use a key with Hashpower read access.</Trans>}
+        {error === 'account_unavailable' && <Trans>Check the selected account in Braiins ID.</Trans>}
+        {error === 'temporarily_unavailable' && <Trans>Account verification is temporarily unavailable. Try again.</Trans>}
+      </div>
+    </div>
   );
 }
 
@@ -587,12 +658,11 @@ function MiningStep({
                   className={textInputCss}
                 />
               </Field>
-              <Field label={t`RPC password`}>
-                <PasswordField
-                  value={form.bitcoind_rpc_password}
-                  onChange={(v) => update('bitcoind_rpc_password', v)}
-                />
-              </Field>
+              <PasswordField
+                label={t`RPC password`}
+                value={form.bitcoind_rpc_password}
+                onChange={(v) => update('bitcoind_rpc_password', v)}
+              />
             </div>
           </div>
         )}
@@ -662,9 +732,12 @@ function ReviewStep({
   return (
     <div className="space-y-4">
       <Section title={t`Review`}>
-        <ReviewRow label={t`Owner token`} value={maskToken(form.braiins_owner_token)} />
-        {form.braiins_read_only_token && (
-          <ReviewRow label={t`Read-only token`} value={maskToken(form.braiins_read_only_token)} />
+        <ReviewRow label={t`Hashpower API version`} value={form.braiins_api_version} />
+        {form.braiins_api_version === 'v2'
+          ? <ReviewRow label={t`Braiins ID API key (v2)`} value="••••••••" />
+          : <ReviewRow label={t`Owner token`} value="••••••••" />}
+        {form.braiins_api_version === 'v1' && form.braiins_read_only_token.trim() && (
+          <ReviewRow label={t`Read-only token`} value="••••••••" />
         )}
         <ReviewRow label={t`Dashboard password`} value="••••••••" />
         <ReviewRow label={t`Target hashrate`} value={phLabel(form.target_hashrate_ph)} />
@@ -778,38 +851,40 @@ function Field({
  * pasted before submitting.
  */
 function PasswordField({
-  value,
-  onChange,
-  autoFocus,
-  placeholder,
+  label, hint, value, onChange, inputRef,
 }: {
+  label: string;
+  hint?: string;
   value: string;
   onChange: (next: string) => void;
-  autoFocus?: boolean;
-  placeholder?: string;
+  inputRef?: React.Ref<HTMLInputElement>;
 }) {
-  const { i18n } = useLingui();
-  void i18n;
+  const id = useId();
   const [shown, setShown] = useState(false);
   return (
-    <div className="relative">
-      <input
-        type={shown ? 'text' : 'password'}
-        value={value}
-        autoFocus={autoFocus}
-        placeholder={placeholder}
-        onChange={(e) => onChange(e.target.value)}
-        className={`${textInputCss} pr-10`}
-      />
-      <button
-        type="button"
-        onClick={() => setShown((s) => !s)}
-        aria-label={shown ? t`Hide value` : t`Show value`}
-        title={shown ? t`Hide` : t`Show`}
-        className="absolute inset-y-0 right-2 flex items-center text-slate-400 hover:text-slate-200 focus:outline-none"
-      >
-        {shown ? <EyeOffIcon /> : <EyeIcon />}
-      </button>
+    <div className="text-sm">
+      <label htmlFor={id} className="block text-slate-300 mb-1">{label}</label>
+      <div className="relative">
+        <input
+          id={id}
+          ref={inputRef}
+          aria-describedby={hint ? `${id}-hint` : undefined}
+          type={shown ? 'text' : 'password'}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className={`${textInputCss} pr-10`}
+        />
+        <button
+          type="button"
+          onClick={() => setShown((s) => !s)}
+          aria-label={shown ? t`Hide value` : t`Show value`}
+          title={shown ? t`Hide` : t`Show`}
+          className="absolute inset-y-0 right-2 flex items-center text-slate-400 hover:text-slate-200 focus:outline-none"
+        >
+          {shown ? <EyeOffIcon /> : <EyeIcon />}
+        </button>
+      </div>
+      {hint && <p id={`${id}-hint`} className="text-xs text-slate-400 mt-1">{hint}</p>}
     </div>
   );
 }
@@ -841,9 +916,4 @@ function ReviewRow({ label, value }: { label: string; value: string }) {
       <span className="text-slate-100 font-mono text-right truncate max-w-[60%]">{value}</span>
     </div>
   );
-}
-
-function maskToken(token: string): string {
-  if (token.length <= 6) return '••••••';
-  return `${token.slice(0, 3)}…${token.slice(-3)}`;
 }

@@ -74,6 +74,8 @@ import { registerDdnsRoute } from './routes/ddns.js';
 import { registerDdnsTestRoute } from './routes/ddns-test.js';
 import { registerPoolUrlTestRoute } from './routes/pool-url-test.js';
 import { registerDatumTestRoute } from './routes/datum-test.js';
+import type { V2BidMutations } from '../services/v2-bid-mutations.js';
+import { registerBraiinsRecoveryRoutes } from './routes/braiins-recovery.js';
 import { registerStaleUrlsRoute } from './routes/stale-urls.js';
 import type { BraiinsClient } from '@hashrate-autopilot/braiins-client';
 import type { PublicIpService } from '../services/public-ip.js';
@@ -141,6 +143,8 @@ export interface HttpServerDeps {
   ) => void | Promise<void>;
   /** #113: Braiins client - used by the stale-URL cancel endpoint to call Braiins's cancelBid. */
   readonly braiinsClient: BraiinsClient;
+  readonly v1MigrationGuard?: import('../config/braiins.js').V1MigrationGuard;
+  readonly v2BidMutations?: V2BidMutations;
   /** Sops/env secrets snapshot - fallback for empty `config` row fields. The BIP 110 scanner uses this to build a fresh client per request so saved Config edits take effect without a daemon restart. */
   readonly secrets: {
     readonly bitcoind_rpc_url?: string;
@@ -350,6 +354,8 @@ export async function createHttpServer(deps: HttpServerDeps): Promise<HttpServer
   // #332: in-app credential rotation (password + Braiins tokens).
   await registerSecurityRoutes(app, {
     secretsRepo: deps.secretsRepo,
+    braiinsVersion: deps.braiinsClient.apiVersion ?? 'v1',
+    ...(deps.v1MigrationGuard ? { v1MigrationGuard: deps.v1MigrationGuard } : {}),
     secretSource: deps.secretSource,
     getCurrentPassword: () => currentPassword,
     setDashboardPassword,
@@ -426,7 +432,12 @@ export async function createHttpServer(deps: HttpServerDeps): Promise<HttpServer
   });
   await registerPoolUrlTestRoute(app);
   await registerDatumTestRoute(app);
+  if (deps.braiinsClient.apiVersion === 'v2' && deps.v2BidMutations) {
+    registerBraiinsRecoveryRoutes(app, deps.v2BidMutations);
+  }
   await registerStaleUrlsRoute(app, {
+    ...(deps.v1MigrationGuard ? { v1MigrationGuard: deps.v1MigrationGuard } : {}),
+    ...(deps.v2BidMutations ? { v2BidMutations: deps.v2BidMutations } : {}),
     configRepo: deps.configRepo,
     ownedBidsRepo: deps.ownedBidsRepo,
     braiinsClient: deps.braiinsClient,

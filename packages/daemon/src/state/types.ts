@@ -580,7 +580,10 @@ export interface ClosedBidsCacheTable {
 
 export interface SecretsTable {
   id: Generated<number>;
-  braiins_owner_token: string;
+  braiins_api_version: Generated<'v1' | 'v2'>;
+  braiins_account_id: string | null;
+  braiins_api_key: string | null;
+  braiins_owner_token: string | null;
   braiins_read_only_token: string | null;
   dashboard_password: string;
   bitcoind_rpc_url: string | null;
@@ -731,6 +734,17 @@ export interface Database {
   ocean_payouts: OceanPayoutsTable;
   runtime_state: RuntimeStateTable;
   owned_bids: OwnedBidsTable;
+  braiins_mutation_intents: {
+    id: number;
+    account_id: string;
+    request_id: string;
+    command: string;
+    created_at: number;
+    attempt: number;
+    accepted: number;
+    unexecuted: number;
+    retry_at: number | null;
+  };
   deferred_actions: DeferredActionsTable;
   decisions: DecisionsTable;
   spend_events: SpendEventsTable;
@@ -742,6 +756,11 @@ export interface Database {
   bid_events: BidEventsTable;
   closed_bids_cache: ClosedBidsCacheTable;
   secrets: SecretsTable;
+  braiins_account_binding: {
+    id: number;
+    account_id: string;
+    needs_live_confirmation: Generated<0 | 1>;
+  };
   block_version_cache: BlockVersionCacheTable;
   braiins_deposits: BraiinsDepositsTable;
   solo_miners: SoloMinersTable;

@@ -2,6 +2,8 @@
 
 Status: **implemented** (build 771). Related: #331 (secrets at rest), GHSA-wvpp.
 
+For the current v2 key rotation and account migration procedure, see [Hashpower API version](configuration.md#braiins-hashpower-api-version). Braiins credential changes apply on daemon restart. The design history below describes the original v1 token work.
+
 ## Why
 
 The config-table secrets (Telegram token, bitcoind RPC password, DDNS credential) are already changeable in Config. But three secrets are **wizard-only** today - once set, there's no in-app way to change them:

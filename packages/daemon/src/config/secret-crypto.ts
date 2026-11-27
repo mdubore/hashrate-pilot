@@ -19,6 +19,7 @@ import { encryptField, decryptField, isEncrypted } from './field-crypto.js';
  * needs re-entry).
  */
 export const SECRETS_ENCRYPTED_FIELDS = [
+  'braiins_api_key',
   'braiins_owner_token',
   'braiins_read_only_token',
   'bitcoind_rpc_password',

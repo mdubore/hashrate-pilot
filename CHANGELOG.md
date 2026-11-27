@@ -2,6 +2,10 @@
 
 ## 2026-11-27
 
+### `[Fix]` Read DATUM Gateway statistics on StartOS
+
+When the gateway returns HTTP 404 for `/umbrel-api`, the connection test and background monitor now read worker count and estimated hashrate from its status page.
+
 ### `[UI]` Introduce Hashrate Pilot
 
 The dashboard, support bundles and notifications now identify this community continuation as Hashrate Pilot. The project has its own issue tracker and private security reporting.

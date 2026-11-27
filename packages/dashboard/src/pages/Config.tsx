@@ -4865,10 +4865,8 @@ function Field({
             <Trans>⚠ This is not Umbrel-specific.</Trans>
             <InlineInfoPopover ariaLabel={t`More about the /umbrel-api naming`}>
               <Trans>
-                Even though the endpoint is named <code className="text-slate-200">/umbrel-api</code>,
-                it lives inside Datum Gateway itself - compiled in via{' '}
-                <code className="text-slate-200">#ifdef DATUM_API_FOR_UMBREL</code> and works on any
-                Datum build with that flag set, regardless of host platform.
+                Pilot checks <code className="text-slate-200">/umbrel-api</code> for gateway
+                statistics. If that endpoint returns HTTP 404, Pilot reads the DATUM status page.
               </Trans>{' '}
               <a
                 href="https://github.com/mdubore/hashrate-pilot/blob/main/docs/setup-datum-api.md#background"

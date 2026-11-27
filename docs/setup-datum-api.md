@@ -1,4 +1,23 @@
-# Exposing the Datum Gateway API on Umbrel
+# Connecting Hashrate Pilot to Datum Gateway
+
+## StartOS
+
+In **Config → Datum stats API**, use the HTTP base URL for the gateway's **web** interface.
+Keep the address supplied by the StartOS package. For example, `http://datum.startos:7152`
+works when that name and port are reachable from the daemon. Leave the path empty and
+select **Test connection**.
+
+Hashrate Pilot requests `/umbrel-api` first. If the gateway returns HTTP 404, Pilot reads
+the status page at `/`. It uses **Total Work Subscriptions** for the worker count, or
+**Total Connections** when subscriptions are unavailable. **Estimated Hashrate** is
+converted to PH/s. An unavailable reading stays unknown. A page with neither reading
+fails the connection test. Background monitoring uses the same check.
+
+For payout tracking, configure Electrs separately. Enter its bare host (for example
+`electrs.startos`) and its assigned plaintext Electrum TCP port in the two Electrum
+fields. StartOS may supply a bridge IP and port for either service.
+
+## Exposing the Datum Gateway API on Umbrel
 
 > **Status:** **WORKING**, but **every Datum app update reverts this and
 > the Datum panel goes blank again** (confirmed 2026-06-28 - the
@@ -282,9 +301,8 @@ given app version, and that's enough for now.
 1. Config field `datum_api_url` (nullable string, default null -
    integration is disabled when unset).
 2. Service `packages/daemon/src/services/datum.ts` polls
-   `{datum_api_url}/umbrel-api` each tick, parses the three-stats
-   JSON, extracts connection count and hashrate (Th/s), and
-   converts hashrate to PH/s.
+   `{datum_api_url}/umbrel-api` each tick. On HTTP 404 it reads the gateway
+   status table at the configured base. Both paths report workers and hashrate in PH/s.
 3. Column `datum_hashrate_ph REAL` on `tick_metrics` (migration
    0029) stores the per-tick Datum-reported hashrate, null when
    the integration is disabled or the poll failed.

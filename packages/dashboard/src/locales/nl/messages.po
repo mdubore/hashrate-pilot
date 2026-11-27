@@ -1740,10 +1740,6 @@ msgid "Datum (received)"
 msgstr "Datum (ontvangen)"
 
 #: src/pages/Status.tsx
-msgid "Datum /umbrel-api HTTP poll."
-msgstr "Datum /umbrel-api HTTP-poll."
-
-#: src/pages/Status.tsx
 msgid "datum hashrate"
 msgstr "datum hashrate"
 
@@ -2170,10 +2166,6 @@ msgstr "Geschat maximum bij huidige instellingen: ~ {totalStr} (alleen logs, exc
 #: src/pages/Config.tsx
 msgid "Estimated cap at current settings: ~ {totalStr} (logs only, indexes excluded). Logs grow ~ {dailyStr}/day. Database file is currently {dbStr}."
 msgstr "Geschat maximum bij huidige instellingen: ~ {totalStr} (alleen logs, exclusief indexen). Logs groeien ~ {dailyStr}/dag. Databasebestand is momenteel {dbStr}."
-
-#: src/pages/Config.tsx
-msgid "Even though the endpoint is named <0>/umbrel-api</0>, it lives inside Datum Gateway itself - compiled in via <1>#ifdef DATUM_API_FOR_UMBREL</1> and works on any Datum build with that flag set, regardless of host platform."
-msgstr "Hoewel de endpoint <0>/umbrel-api</0> heet, zit hij in Datum Gateway zelf - gecompileerd via <1>#ifdef DATUM_API_FOR_UMBREL</1> en werkt op elke Datum-build met die vlag gezet, ongeacht het hostplatform."
 
 #: src/pages/History.tsx
 msgid "Event detail"
@@ -3813,6 +3805,10 @@ msgstr "Kies een datum"
 msgid "pick…"
 msgstr "kiezen…"
 
+#: src/pages/Config.tsx
+msgid "Pilot checks <0>/umbrel-api</0> for gateway statistics. If that endpoint returns HTTP 404, Pilot reads the DATUM status page."
+msgstr "Pilot vraagt de gatewaystatistieken op via <0>/umbrel-api</0>. Bij HTTP 404 leest Pilot de statuspagina van DATUM."
+
 #: src/pages/Status.tsx
 msgid "Pipeline"
 msgstr "Pijplijn"
@@ -4102,6 +4098,10 @@ msgstr "Haal beide kanten van het grootboek opnieuw op (Braiins-biedingen herpag
 #: src/pages/Setup.tsx
 msgid "Re-setup"
 msgstr "Opnieuw instellen"
+
+#: src/pages/Status.tsx
+msgid "Reachability of DATUM gateway statistics over HTTP."
+msgstr "Bereikbaarheid van de DATUM-gatewaystatistieken via HTTP."
 
 #: src/pages/Config.tsx
 msgid "Read the host and port off your Electrum server's own connection page - the same applies to Electrs, Fulcrum, or ElectrumX, on Umbrel, Docker, Start9, or bare metal. A fresh Umbrel install auto-fills these for the Electrum server you chose at setup, so you usually don't need to touch them."

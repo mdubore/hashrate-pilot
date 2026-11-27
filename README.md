@@ -99,7 +99,7 @@ Non-goals: SaaS / multi-user, cloud deployment, hands-free wallet funding, gaple
   (default), resume last mode, or always live. Old `tick_metrics` and uneventful `decisions` rows are pruned
   hourly per configurable retention windows.
 - Each tick also polls the **Ocean pool API** (hashprice, pool stats, payout estimate, recent blocks) and - when
-  a `datum_api_url` is configured - the **Datum Gateway's `/umbrel-api`** for a second hashrate reading measured
+  a `datum_api_url` is configured - the **Datum Gateway** for a second hashrate reading measured
   at the gateway. Both integrations are informational; the control loop never depends on them being reachable.
   Ocean's API covers only the mainstream chain - if you mine Ocean's BIP110 endpoint, see
   [Mining on Ocean's BIP110 chain](#mining-on-oceans-bip110-chain).
@@ -171,15 +171,10 @@ Full design: [`docs/spec.md`](docs/spec.md) · [`docs/architecture.md`](docs/arc
   (also BIP-110-aware) / mempool.space / blockstream / blockchair / btcscan / btc.com / your own local explorer are
   preset pills on the Config page). Tooltips show block height, reward / subsidy / fees, and an estimated
   our-share for the block based on the current share_log.
-- **Datum Gateway integration (optional)** - when `datum_api_url` is configured, the daemon polls Datum's
-  `/umbrel-api` each tick and records the gateway-measured hashrate alongside the Braiins-reported number. A
-  sustained gap means Braiins is billing for hashrate the gateway never saw. Despite the name, `/umbrel-api`
-  is a Datum Gateway endpoint, not an Umbrel one - it's compiled into the Datum binary when built with
-  `DATUM_API_FOR_UMBREL` (the Umbrel image is built that way; the endpoint exists on the Datum side and
-  Umbrel just consumes it for its app-card widget). The default port is 7152, which the Umbrel image
-  rewires to container port 21000 - that's why the setup doc maps host `7152 → container 21000`. See
-  [`docs/setup-datum-api.md`](docs/setup-datum-api.md) - on Umbrel the API port is not exposed by default and
-  needs a one-line compose edit plus a full OS reboot (tested and stable since 2026-04-19).
+- **Datum Gateway integration (optional)** — enter the gateway's web base URL to track its worker
+  count and compare its measured hashrate with Braiins. Pilot reads the JSON stats endpoint
+  (`/umbrel-api`). If it returns HTTP 404, as on StartOS gateways built without that endpoint,
+  Pilot reads the same gateway's status page. [StartOS and Umbrel setup](docs/setup-datum-api.md)
 - **Measured P&L and runway** - spend is read from Braiins' account transaction ledger (settled cost, not
   modelled bid × delivered) and income from on-chain payouts observed via your Electrum server or bitcoind. Runway on the
   Braiins service card is days-of-balance at the current measured spend rate.

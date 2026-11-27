@@ -1,8 +1,8 @@
 /**
  * Datum Gateway stats poller (issue #19).
  *
- * Polls `{apiUrl}/umbrel-api` once per tick when configured, parses the
- * three-stats JSON response, and exposes connection count + hashrate.
+ * Reads connection count and hashrate from the gateway's three-stats JSON
+ * endpoint, or its status table when the JSON endpoint is absent.
  * Integration is informational only - the control loop does not depend
  * on Datum being reachable. Failures are counted and surfaced as
  * `reachable: false`; they never throw out of `poll()`.
@@ -86,7 +86,7 @@ export class DatumService {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
-      const response = await fetch(`${this.apiUrl}/umbrel-api`, {
+      const request: RequestInit = {
         signal: controller.signal,
         // #310: don't silently follow a redirect. An auth proxy in front
         // of the Datum API (e.g. Umbrel's app-proxy) answers an
@@ -95,23 +95,39 @@ export class DatumService {
         // baffling "Unexpected token '<'". Surfacing the redirect lets us
         // hand back an actionable hint instead.
         redirect: 'manual',
-      });
-      if (
-        response.type === 'opaqueredirect' ||
-        (response.status >= 300 && response.status < 400)
-      ) {
+      };
+      let response = await fetch(`${this.apiUrl}/umbrel-api`, request);
+      const useDashboard = response.status === 404;
+      if (useDashboard) {
+        await response.body?.cancel();
+        response = await fetch(`${this.apiUrl}/`, request);
+      }
+      if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) {
+        await response.body?.cancel();
         return this.fail(
           checkedAt,
           'redirected to a login page - the Datum API is behind an auth proxy (e.g. Umbrel app-proxy). Expose it directly or disable the proxy auth; see docs/setup-datum-api.md',
         );
       }
       if (!response.ok) {
-        return this.fail(checkedAt, `HTTP ${response.status}`);
+        await response.body?.cancel();
+        return this.fail(
+          checkedAt,
+          `${useDashboard ? 'DATUM dashboard ' : ''}HTTP ${response.status}`,
+        );
       }
       // Read the body as text and parse explicitly, so an HTML page
       // served with a 200 (some proxies inline the login page) yields a
       // clear hint instead of an "Unexpected token '<'".
       const body = await response.text();
+      if (useDashboard) {
+        const { connections, hashrate_ph } = dashboardStats(body);
+        if (connections === null && hashrate_ph === null) {
+          return this.fail(checkedAt, 'DATUM dashboard stats not found');
+        }
+        return this.success(checkedAt, connections, hashrate_ph);
+      }
+
       let payload: UmbrelApiResponse;
       try {
         payload = JSON.parse(body) as UmbrelApiResponse;
@@ -126,15 +142,7 @@ export class DatumService {
       }
       const connections = extractNumber(payload, 'Connections');
       const hashrate_ph = extractHashratePh(payload);
-      this.lastOkAt = checkedAt;
-      this.consecutiveFailures = 0;
-      return {
-        reachable: true,
-        connections,
-        hashrate_ph,
-        checked_at: checkedAt,
-        error: null,
-      };
+      return this.success(checkedAt, connections, hashrate_ph);
     } catch (err) {
       // #310: a bare "fetch failed" is usually connection refused /
       // nothing listening - common right after an Umbrel app update
@@ -156,6 +164,16 @@ export class DatumService {
     };
   }
 
+  private success(
+    checkedAt: number,
+    connections: number | null,
+    hashrate_ph: number | null,
+  ): DatumPollResult {
+    this.lastOkAt = checkedAt;
+    this.consecutiveFailures = 0;
+    return { reachable: true, connections, hashrate_ph, checked_at: checkedAt, error: null };
+  }
+
   private fail(checkedAt: number, error: string): DatumPollResult {
     this.consecutiveFailures += 1;
     return {
@@ -166,6 +184,35 @@ export class DatumService {
       error,
     };
   }
+}
+
+// DATUM Gateway's status table places each value in the cell next to its label.
+function dashboardStats(html: string): Pick<DatumPollResult, 'connections' | 'hashrate_ph'> {
+  function cell(label: string): string {
+    const pattern = new RegExp(
+      String.raw`<t[hd]\b[^>]*>\s*${label}:?\s*</t[hd]>\s*<td\b[^>]*>([^<]*)</td>`,
+      'i',
+    );
+    return (
+      pattern
+        .exec(html)?.[1]
+        ?.replace(/&nbsp;/gi, ' ')
+        .trim() ?? ''
+    );
+  }
+
+  function count(value: string): number | null {
+    if (!/^\d+$/.test(value)) return null;
+    const n = Number(value);
+    return Number.isSafeInteger(n) ? n : null;
+  }
+
+  const connections = count(cell('Total Work Subscriptions')) ?? count(cell('Total Connections'));
+  const [, value, unit] =
+    /^(\d+(?:\.\d+)?)\s*([gtpe]h)\/(?:s|sec)$/i.exec(cell('Estimated Hashrate')) ?? [];
+  const multiplier = unit ? HASHRATE_UNIT_TO_PH[unit.toLowerCase() + '/s'] : undefined;
+  const ph = multiplier === undefined ? NaN : Number(value) * multiplier;
+  return { connections, hashrate_ph: Number.isFinite(ph) ? ph : null };
 }
 
 function extractNumber(payload: UmbrelApiResponse, title: string): number | null {
